@@ -5,6 +5,7 @@ mod agnes;
 mod ai_history;
 mod clipboard_history;
 mod desktop;
+mod email_digest;
 mod gmail;
 mod home_shortcuts;
 mod launcher;
@@ -294,6 +295,8 @@ pub fn run() {
             home_shortcuts::launch_home_shortcut,
             launcher::launcher_search,
             agnes::launcher_ai,
+            email_digest::email_digest_cached,
+            email_digest::email_digest_refresh,
             gmail::email_account,
             gmail::email_connect,
             gmail::email_disconnect,
@@ -315,6 +318,9 @@ pub fn run() {
         ])
         .setup(|app| {
             let handle = app.handle().clone();
+            if let Err(error) = email_digest::initialize(&handle) {
+                eprintln!("wallp: couldn't initialize email digest: {error}");
+            }
             build_tray(&handle)?;
             launcher::setup(&handle)?;
             if let Err(err) = attach_desktop(&handle) {
@@ -336,7 +342,12 @@ pub fn run() {
             RunEvent::ExitRequested {
                 code: None, api, ..
             } => api.prevent_exit(),
-            RunEvent::Exit => restore_desktop(app),
+            RunEvent::Exit => {
+                if let Err(error) = email_digest::record_close(app) {
+                    eprintln!("wallp: couldn't save email last-closed time: {error}");
+                }
+                restore_desktop(app);
+            }
             _ => {}
         });
 }

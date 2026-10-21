@@ -86,6 +86,22 @@ run in the native backend. Set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`
 (a Google Cloud "Desktop app" OAuth client with the Gmail API enabled) in the
 root `.env` and rebuild; like the Agnes key, they are compiled into the app.
 
+Home includes an **Inbox brief** below the clocks. The initial brief summarizes
+the latest ten received messages, including archived mail, using Agnes. Later
+checks run every minute while the desktop is visible and send only previously
+unprocessed received mail. Categories show email counts; choose a category or
+**View all** to read summaries. Highlights prioritize action items, then other
+relevant mail when nothing needs urgent attention. Subjects open the originals
+in Gmail. Summarization does not mark mail read.
+
+The initial last-closed timestamp is the current time. Graceful app exit records
+the actual closure time. A separate successful-processing checkpoint and saved
+message IDs prevent repeated AI submissions and retain failed batches for retry.
+The brief persists in `%LOCALAPPDATA%\com.anupa.wallp\email-digest.sqlite3`;
+disconnecting Gmail clears it. Received sender, subject, date, snippet, and up to
+14,000 characters of each email body are sent to Agnes; attachments are excluded.
+Category counts are computed from validated per-message classifications.
+
 Choose **Customize** to set whole-number grid columns and rows, and the selected
 panel's **Wide** and **Tall** spans. Drag the grip to snap to a cell or drag the
 corner to resize by cells. Arrow keys on either handle adjust one cell. Dragging
@@ -159,7 +175,8 @@ Set `AGNES_API_KEY` in the root `.env` (see `.env.example`) and restart/rebuild
 the app after changing it. The key is compiled into the native app rather than
 the frontend bundle; AI requests run through the native backend. Only submitted
 questions, the current conversation, local time/timezone, and results of requested
-reminder/todo tools are sent to Agnes. A distributed desktop
+reminder/todo tools are sent to Agnes by command-menu chat. The Home email brief
+also sends received email content as described above. A distributed desktop
 binary contains its configured key.
 
 **Ctrl+Space** opens the command menu. Search for **paste** or

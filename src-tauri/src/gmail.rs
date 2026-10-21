@@ -58,19 +58,19 @@ pub struct Address {
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Message {
-    id: String,
-    thread_id: String,
-    from: Address,
+    pub(crate) id: String,
+    pub(crate) thread_id: String,
+    pub(crate) from: Address,
     to: Vec<Address>,
-    subject: String,
-    snippet: String,
+    pub(crate) subject: String,
+    pub(crate) snippet: String,
     /// Milliseconds since the Unix epoch.
-    date: i64,
+    pub(crate) date: i64,
     unread: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    body: Option<String>,
+    pub(crate) body: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    body_html: Option<String>,
+    pub(crate) body_html: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -344,7 +344,9 @@ pub async fn email_connect(app: tauri::AppHandle) -> Result<Account, String> {
 }
 
 #[tauri::command]
-pub fn email_disconnect(app: tauri::AppHandle) -> Result<(), String> {
+pub async fn email_disconnect(app: tauri::AppHandle) -> Result<(), String> {
+    let _guard = crate::email_digest::SYNC.lock().await;
+    crate::email_digest::clear(&app)?;
     crate::mail_cache::clear(&app)?;
     match keyring_entry()?.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
@@ -478,7 +480,7 @@ fn to_message(msg: GmailMessage, full: bool) -> Message {
     }
 }
 
-fn account_email() -> Result<String, String> {
+pub(crate) fn account_email() -> Result<String, String> {
     Ok(load_stored()?
         .ok_or("Connect a Google account first.")?
         .email)
@@ -486,6 +488,80 @@ fn account_email() -> Result<String, String> {
 
 const META_QUERY: &str =
     "format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject";
+
+/// Received mail across the mailbox, including archived messages. Never marks it read.
+/// The initial sample is ten messages; subsequent scans paginate the entire time window.
+pub(crate) async fn digest_messages(
+    since: i64,
+    through: i64,
+    sample: bool,
+) -> Result<Vec<Message>, String> {
+    use futures::{StreamExt, TryStreamExt, stream};
+    let token = access_token().await?;
+    let http = reqwest::Client::builder()
+        .timeout(Duration::from_secs(45))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let query = if sample {
+        "-in:sent -in:drafts".to_owned()
+    } else {
+        format!(
+            "-in:sent -in:drafts after:{} before:{}",
+            since / 1000 - 1,
+            through / 1000 + 1
+        )
+    };
+    let mut ids = Vec::new();
+    let mut page = None;
+    loop {
+        let mut request = http
+            .get(format!("{GMAIL}/messages"))
+            .bearer_auth(&token)
+            .query(&[
+                ("q", query.as_str()),
+                ("maxResults", if sample { "10" } else { "100" }),
+            ]);
+        if let Some(ref page) = page {
+            request = request.query(&[("pageToken", page)]);
+        }
+        let list = api(request).await?;
+        if let Some(messages) = list["messages"].as_array() {
+            ids.extend(
+                messages
+                    .iter()
+                    .filter_map(|m| m["id"].as_str().map(str::to_owned)),
+            );
+        }
+        page = list["nextPageToken"].as_str().map(str::to_owned);
+        if sample || page.is_none() {
+            break;
+        }
+    }
+    let mut messages: Vec<Message> = stream::iter(ids.into_iter().map(|id| {
+        let http = &http;
+        let token = &token;
+        async move {
+            let value = api(http
+                .get(format!("{GMAIL}/messages/{id}?format=full"))
+                .bearer_auth(token))
+            .await?;
+            let raw: GmailMessage = serde_json::from_value(value).map_err(|e| e.to_string())?;
+            Ok::<_, String>(to_message(raw, true))
+        }
+    }))
+    .buffer_unordered(8)
+    .try_collect()
+    .await?;
+    messages.retain(|m| {
+        if sample {
+            m.date <= through
+        } else {
+            m.date > since && m.date <= through
+        }
+    });
+    messages.sort_by_key(|m| std::cmp::Reverse(m.date));
+    Ok(messages)
+}
 
 /// Listing metadata for many messages in one HTTP round trip via Gmail's
 /// multipart batch endpoint, falling back to parallel requests if rejected.

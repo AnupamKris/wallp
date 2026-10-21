@@ -1,4 +1,4 @@
-import { useEffect, useRef, type CSSProperties } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Slider } from "@/components/ui/slider";
@@ -6,6 +6,7 @@ import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/compone
 import { TaskbarControl } from "./Taskbar";
 import { LauncherSettings } from "./Launcher";
 import { startClockSweep } from "./clock-motion";
+import { ThemeSettings, type Theme } from "./Theme";
 
 export const zones = [
   { label: "Shanghai", zone: "Asia/Shanghai", color: "#82cbd1" },
@@ -151,14 +152,36 @@ export function ClockFace({ now, zone, style, seconds, stacked = false, animate 
     <circle cx="160" cy="160" r="3" className="clock-pin" />
   </svg>;
 }
-export function WorldClocks({ now, settings, active = true }: { now: Date; settings: Settings; active?: boolean }) {
+export function WorldClocks({ now, settings, active = true, fit = false }: { now: Date; settings: Settings; active?: boolean; fit?: boolean }) {
+  const region = useRef<HTMLElement>(null);
+  const [available, setAvailable] = useState({ width: 0, height: 0 });
+  useLayoutEffect(() => {
+    if (!fit || !region.current) return;
+    const measure = () => {
+      const rect = region.current?.getBoundingClientRect();
+      if (rect) setAvailable({ width: rect.width, height: rect.height });
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(region.current);
+    return () => observer.disconnect();
+  }, [fit]);
   const analog = analogueStyles.includes(settings.style);
+  const shared = analog && settings.stackedAnalogue;
+  const stacked = !shared && settings.layout === "stack";
+  const count = shared ? 1 : zones.length;
+  const gap = 32;
+  const fittedSize = fit && available.width && available.height
+    ? Math.max(24, Math.min(settings.size, stacked ? available.width : (available.width - gap * (count - 1)) / count,
+        stacked ? (available.height - gap * (count - 1)) / count - 40 : available.height - 40))
+    : settings.size;
+  const regionStyle = { "--clock-size": `${fittedSize}px`, ...(fit ? { gap: `${gap}px` } : {}) } as CSSProperties;
   if (analog && settings.stackedAnalogue) {
     const description = zones.map(({ label, zone }) => {
       const time = zonedTime(now, zone);
       return `${label}, ${time.hour}:${time.minute}:${time.second}`;
     }).join("; ");
-    return <section className="world-clocks shared-clock" aria-label="World clocks" style={{ "--clock-size": `${settings.size}px` } as CSSProperties}>
+    return <section ref={region} className="world-clocks shared-clock" aria-label="World clocks" style={regionStyle}>
       <time className="world-clock" dateTime={now.toISOString()} aria-label={description}>
         <div className="clock-art"><ClockFace now={now} zone={zones[0].zone} style={settings.style} seconds={settings.seconds} stacked animate={active} /></div>
         <div className="clock-legend" aria-label="Hand colours">
@@ -167,7 +190,7 @@ export function WorldClocks({ now, settings, active = true }: { now: Date; setti
       </time>
     </section>;
   }
-  return <section className={`world-clocks layout-${settings.layout}`} aria-label="World clocks" style={{ "--clock-size": `${settings.size}px` } as CSSProperties}>
+  return <section ref={region} className={`world-clocks layout-${settings.layout}`} aria-label="World clocks" style={regionStyle}>
     {zones.map(({ label, zone }) => {
       const time = zonedTime(now, zone);
       return <time key={zone} className="world-clock" dateTime={now.toISOString()} aria-label={`${label}, ${time.hour}:${time.minute}:${time.second}`}>
@@ -177,13 +200,14 @@ export function WorldClocks({ now, settings, active = true }: { now: Date; setti
     })}
   </section>;
 }
-export function ClockSettings({ settings, onChange, onClose, now }: { settings: Settings; onChange: (settings: Settings) => void; onClose: () => void; now: Date }) {
+export function ClockSettings({ settings, onChange, theme, onThemeChange, onClose, now }: { settings: Settings; onChange: (settings: Settings) => void; theme: Theme; onThemeChange: (theme: Theme) => void; onClose: () => void; now: Date }) {
   const update = (patch: Partial<Settings>) => onChange({ ...settings, ...patch });
   return <Dialog open onOpenChange={open => { if (!open) onClose(); }}>
     <DialogContent className="settings-dialog">
       <header className="settings-header"><span className="settings-eyebrow">PERSONALIZE / 01</span><DialogTitle className="text-2xl font-normal tracking-tight">Settings</DialogTitle><DialogDescription>Personalize your clocks and desktop.</DialogDescription></header>
       <div className="settings-body">
       <div className="settings-gallery">
+      <ThemeSettings theme={theme} onChange={onThemeChange} />
       {([true, false] as const).map(analogue => <fieldset key={String(analogue)} className="style-fieldset"><legend>{analogue ? "Analogue" : "Digital"}<span>{styles.filter(style => analogueStyles.includes(style.id) === analogue).length} styles</span></legend><div className="style-grid">
         {styles.filter(style => analogueStyles.includes(style.id) === analogue).map(style => <Button key={style.id} variant="outline" className={`style-option${settings.style === style.id ? " selected" : ""}`} aria-label={style.label} aria-pressed={settings.style === style.id} onClick={() => update({ style: style.id })}>
           <div className="style-preview"><ClockFace now={now} zone="Asia/Kolkata" style={style.id} seconds={false} /></div><span>{style.label}</span><small>{style.description}</small>
@@ -199,7 +223,7 @@ export function ClockSettings({ settings, onChange, onClose, now }: { settings: 
           {sizePresets.map(preset => <Button variant="outline" className="size-preset" key={preset.size} aria-pressed={settings.size === preset.size} onClick={() => update({ size: preset.size })}>{preset.label}<small>{preset.size}px</small></Button>)}
         </div>
         <Slider id="clock-size" aria-labelledby="clock-size-label" min={MIN_CLOCK_SIZE} max={MAX_CLOCK_SIZE} step={10} value={[settings.size]} onValueChange={([size]) => update({ size })} />
-        <small className="size-hint">120–2400px. Oversized clocks keep their size; scroll to explore.</small>
+        <small className="size-hint">120–2400px. Clocks scale down to fit the space above your inbox brief.</small>
       </div>
       {([
         ["stackedAnalogue", "Stacked analogue", "One dial, three coloured sets of hands"],
@@ -210,7 +234,7 @@ export function ClockSettings({ settings, onChange, onClose, now }: { settings: 
       <LauncherSettings />
       </section>
       </div>
-      <footer className="settings-footer"><Button variant="ghost" onClick={() => onChange({ ...defaults })}>Reset</Button><Button onClick={onClose}>Done</Button></footer>
+      <footer className="settings-footer"><Button variant="ghost" onClick={() => onChange({ ...defaults })}>Reset clocks</Button><Button onClick={onClose}>Done</Button></footer>
     </DialogContent>
   </Dialog>;
 }

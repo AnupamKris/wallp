@@ -259,12 +259,12 @@ export function Email() {
 
   async function connect() {
     setConnecting(true); setError("");
-    try { setAccount(await invoke<Account>("email_connect")); }
+    try { setAccount(await invoke<Account>("email_connect")); window.dispatchEvent(new Event("wallp:email-account")); }
     catch (err) { setError(String(err)); }
     finally { setConnecting(false); }
   }
   async function disconnect() {
-    try { await invoke("email_disconnect"); setAccount(null); setMessages([]); setNextPage(undefined); setReady(false); seen.current = null; close(); }
+    try { await invoke("email_disconnect"); setAccount(null); setMessages([]); setNextPage(undefined); setReady(false); seen.current = null; close(); window.dispatchEvent(new Event("wallp:email-account")); }
     catch (err) { setError(String(err)); }
   }
 

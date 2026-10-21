@@ -9,6 +9,8 @@ import { useHomeShortcuts } from "./home-shortcuts";
 import { Workspace } from "./Workspace";
 import { TrayApps } from "./TrayApps";
 import { startClockTicker } from "./clock-motion";
+import { useTheme } from "./Theme";
+import { EmailDigest } from "./EmailDigest";
 
 type AppId = "pc" | "downloads" | "edge" | "steam" | "riot" | "t3";
 const shortcuts: { id: AppId; label: string }[] = [
@@ -34,6 +36,7 @@ function Icon({ name }: { name: AppId | "close" | "alert" | "settings" }) {
 }
 
 function App() {
+  const [theme, setTheme] = useTheme();
   const [settings, setSettings] = useState(loadSettings);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [workspace, setWorkspace] = useState(false);
@@ -115,7 +118,10 @@ function App() {
         {shortcut("pc", "This PC")}
         {shortcut("downloads", "Downloads")}
       </nav>
-      <WorldClocks now={now} settings={settings} active={clockActive && !workspace && !settingsOpen} />
+      <div className="home-content">
+        <WorldClocks now={now} settings={settings} active={clockActive && !workspace && !settingsOpen} fit />
+        <EmailDigest active={!paused && !hidden} />
+      </div>
       <TrayApps active={!workspace && !paused} />
       <nav className="rail applications" aria-label="Applications">
         {shortcuts.map(({ id, label }) => shortcut(id, label))}
@@ -142,7 +148,7 @@ function App() {
         Workspace<ArrowDownIcon />
       </Button>}
       {!workspace && <button className="shortcut settings-trigger" aria-label="Settings" title="Settings" onClick={() => setSettingsOpen(true)}><Icon name="settings" /></button>}
-      {settingsOpen && <ClockSettings settings={settings} onChange={setSettings} onClose={() => setSettingsOpen(false)} now={now} />}
+      {settingsOpen && <ClockSettings settings={settings} onChange={setSettings} theme={theme} onThemeChange={setTheme} onClose={() => setSettingsOpen(false)} now={now} />}
       {error && <div className="launch-error" role="alert" title={error}>
         <Icon name="alert" /><span className="sr-only">{error}</span>
         <button className="shortcut" aria-label="Dismiss error" title="Dismiss error" onClick={() => setError("")}><Icon name="close" /></button>
