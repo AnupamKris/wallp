@@ -529,7 +529,7 @@ fn configure_ctrl_space(app: &AppHandle, registered: &mut bool) {
 fn spawn_hotkey(app: AppHandle) {
     thread::spawn(move || unsafe {
         let mut msg = MSG::default();
-        // Both shortcuts are owned by this message thread.
+        // All global shortcuts are owned by this message thread.
         let _ = PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE);
         HOTKEY_THREAD.store(GetCurrentThreadId(), Ordering::Relaxed);
         let mut registered = false;
@@ -542,12 +542,22 @@ fn spawn_hotkey(app: AppHandle) {
                     false
                 }
             };
+        let desktop_registered =
+            match RegisterHotKey(None, 3, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, b'D' as u32) {
+                Ok(()) => true,
+                Err(error) => {
+                    eprintln!("wallp: Ctrl+Alt+D is unavailable (another app may use it): {error}");
+                    false
+                }
+            };
         while GetMessageW(&mut msg, None, 0, 0).0 > 0 {
-            if msg.message == WM_HOTKEY && msg.wParam.0 == 2 {
+            if msg.message == WM_HOTKEY && matches!(msg.wParam.0, 2 | 3) {
+                let workspace = msg.wParam.0 == 2;
                 let handle = app.clone();
                 let _ = app.run_on_main_thread(move || {
-                    if let Err(error) = crate::taskbar::show_wallp_desktop(handle, true) {
-                        eprintln!("wallp: couldn't open workspace: {error}");
+                    if let Err(error) = crate::taskbar::show_wallp_desktop(handle, workspace) {
+                        let screen = if workspace { "workspace" } else { "desktop" };
+                        eprintln!("wallp: couldn't open {screen}: {error}");
                     }
                 });
                 continue;
@@ -566,6 +576,9 @@ fn spawn_hotkey(app: AppHandle) {
             DispatchMessageW(&msg);
         }
         HOTKEY_THREAD.store(0, Ordering::Relaxed);
+        if desktop_registered {
+            let _ = UnregisterHotKey(None, 3);
+        }
         if workspace_registered {
             let _ = UnregisterHotKey(None, 2);
         }

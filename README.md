@@ -50,6 +50,10 @@ Press **Ctrl+Alt+W** from any app while wallp is running to reveal the workspace
 Like the dock's Workspace button, this minimizes open application windows and
 focuses wallp. The shortcut works independently of the Ctrl+Space setting.
 
+Press **Ctrl+Alt+D** from any app while wallp is running to reveal the main
+desktop. It minimizes open application windows, switches back from Workspace
+to Home, and focuses wallp. It also works independently of the Ctrl+Space setting.
+
 **Notes** is a tabbed plain-text notepad. Use **+** for a new note, **Rename** (or
 double-click a tab) to name it, and **×** to close it. **Reopen closed tab** restores
 closed notes, including after restarting. Each tab saves its own text and name;
