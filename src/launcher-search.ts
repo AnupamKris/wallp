@@ -1,0 +1,31 @@
+export type InstalledApp = { id: string; name: string; icon?: string | null };
+export const engines = [
+  { key: "ai", name: "Ask AI" },
+  { key: "g", name: "Google" },
+  { key: "y", name: "YouTube" },
+  { key: "d", name: "DuckDuckGo" },
+  { key: "w", name: "Wikipedia" },
+  { key: "gh", name: "GitHub" },
+  { key: "r", name: "Reddit" },
+] as const;
+export function parseBang(query: string) {
+  const match = query.trimStart().match(/^!?([a-z]+)(?:\s+(.*))?$/is);
+  if (!match) return null;
+  const engine = engines.find(engine => engine.key === match[1].toLowerCase());
+  if (match[2] === undefined && engine?.key !== "ai") return null;
+  return engine ? { ...engine, query: (match[2] ?? "").trim() } : null;
+}
+export function searchApps(apps: InstalledApp[], query: string): InstalledApp[] {
+  const words = query.toLocaleLowerCase().trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return apps;
+  const ranked = apps.flatMap(app => {
+    const name = app.name.toLocaleLowerCase();
+    if (!words.every(word => name.includes(word))) return [];
+    const phrase = words.join(" ");
+    return [{ app, rank: name === phrase ? 0 : name.startsWith(phrase) ? 1 : 2 }];
+  });
+  return ranked.sort((a, b) => a.rank - b.rank || a.app.name.localeCompare(b.app.name)).map(item => item.app);
+}
+export function isClipboardCommand(query: string) {
+  return /^(paste|clipboard|clipboard history)$/i.test(query.trim());
+}

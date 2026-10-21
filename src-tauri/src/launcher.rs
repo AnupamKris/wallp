@@ -1,0 +1,987 @@
+//! App-only launcher and persistent text/image clipboard. No filesystem search.
+use crate::clipboard_history::{Content, History, Page};
+use serde::{Deserialize, Serialize};
+use std::{
+    os::windows::process::CommandExt,
+    process::Command,
+    sync::{
+        Mutex, OnceLock,
+        atomic::{AtomicBool, AtomicU32, Ordering},
+        mpsc,
+    },
+    thread,
+    time::Duration,
+};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
+use windows::{
+    Win32::{
+        Foundation::{GlobalFree, HANDLE, HGLOBAL, HWND, LPARAM, WPARAM},
+        System::{DataExchange::*, Memory::*, Threading::GetCurrentThreadId},
+        UI::{Input::KeyboardAndMouse::*, WindowsAndMessaging::*},
+    },
+    core::w,
+};
+
+const LABEL: &str = "launcher";
+const TEXT_LIMIT: usize = 100_000;
+const INPUT_TAG: usize = 0x57414c50;
+static READY: AtomicBool = AtomicBool::new(false);
+static CAPTURE: AtomicBool = AtomicBool::new(true);
+static HOTKEY_THREAD: AtomicU32 = AtomicU32::new(0);
+static CTRL_SPACE: AtomicBool = AtomicBool::new(true);
+static OPEN: OnceLock<mpsc::Sender<&'static str>> = OnceLock::new();
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct InstalledApp {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub icon: Option<String>,
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Preferences {
+    ctrl_space: bool,
+    clipboard: bool,
+}
+impl Default for Preferences {
+    fn default() -> Self {
+        Self {
+            ctrl_space: true,
+            clipboard: true,
+        }
+    }
+}
+#[derive(Default)]
+pub struct Launcher {
+    apps: Mutex<Vec<InstalledApp>>,
+    refreshing: AtomicBool,
+    history: Mutex<Option<History>>,
+    target: Mutex<(usize, u32)>,
+    mode: Mutex<String>,
+    shortcut_error: Mutex<Option<String>>,
+}
+fn data_path(app: &AppHandle, name: &str) -> Result<std::path::PathBuf, String> {
+    let dir = app.path().app_local_data_dir().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir.join(name))
+}
+
+pub fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+    if let Ok(path) = data_path(app, "launcher-apps.json") {
+        if let Ok(bytes) = std::fs::read(path) {
+            if let Ok(mut apps) = serde_json::from_slice::<Vec<InstalledApp>>(&bytes) {
+                apps.retain(is_application);
+                *app.state::<Launcher>().apps.lock().unwrap() = apps;
+            }
+        }
+    }
+    if let Ok(path) = data_path(app, "launcher-preferences.json") {
+        if let Ok(bytes) = std::fs::read(path) {
+            if let Ok(prefs) = serde_json::from_slice::<Preferences>(&bytes) {
+                CTRL_SPACE.store(prefs.ctrl_space, Ordering::Relaxed);
+                CAPTURE.store(prefs.clipboard, Ordering::Relaxed);
+            }
+        }
+    }
+    *app.state::<Launcher>().history.lock().unwrap() = Some(History::open(&data_path(
+        app,
+        "clipboard-history.sqlite3",
+    )?)?);
+    let window = WebviewWindowBuilder::new(
+        app,
+        LABEL,
+        WebviewUrl::App("index.html?view=launcher".into()),
+    )
+    .title("wallp commands")
+    .decorations(false)
+    .skip_taskbar(true)
+    .resizable(false)
+    .always_on_top(true)
+    .inner_size(720., 510.)
+    .min_inner_size(360., 300.)
+    .visible(false)
+    .focused(false)
+    .build()?;
+    let handle = app.clone();
+    window.on_window_event(move |event| {
+        if matches!(event, tauri::WindowEvent::Destroyed) {
+            READY.store(false, Ordering::Relaxed);
+        }
+        if matches!(event, tauri::WindowEvent::Focused(false)) {
+            if let Some(window) = handle.get_webview_window(LABEL) {
+                // A queued blur from the previous hide may arrive after reopening.
+                if window
+                    .hwnd()
+                    .is_ok_and(|hwnd| unsafe { GetForegroundWindow() } != hwnd)
+                {
+                    let _ = window.hide();
+                }
+            }
+        }
+    });
+    let (tx, rx) = mpsc::channel();
+    let _ = OPEN.set(tx);
+    let handle = app.clone();
+    thread::spawn(move || {
+        for mode in rx {
+            let app = handle.clone();
+            let _ = handle.run_on_main_thread(move || {
+                if let Err(err) = show(&app, mode) {
+                    eprintln!("wallp launcher: {err}");
+                }
+            });
+        }
+    });
+    spawn_hotkey(app.clone());
+    spawn_clipboard(app.clone());
+    refresh_background(app.clone());
+    Ok(())
+}
+fn refresh_background(app: AppHandle) {
+    thread::spawn(move || {
+        if let Err(error) = refresh_apps(&app) {
+            let _ = app.emit("launcher://error", error);
+        }
+    });
+}
+fn is_application(app: &InstalledApp) -> bool {
+    let id = app.id.to_ascii_lowercase();
+    if id.is_empty()
+        || app.name.trim().is_empty()
+        || app.name.to_ascii_lowercase().starts_with("uninstall ")
+    {
+        return false;
+    }
+    if id.starts_with("http:") || id.starts_with("https:") || id.starts_with("file:") {
+        return false;
+    }
+    if id.contains("://") {
+        return [
+            "steam://",
+            "battlenet://",
+            "uplay://",
+            "com.epicgames.launcher://",
+            "origin2://",
+            "riotclient://",
+        ]
+        .iter()
+        .any(|prefix| id.starts_with(prefix));
+    }
+    if id.contains(['\\', '/']) {
+        return [".exe", ".com", ".msc", ".cpl", ".appref-ms"]
+            .iter()
+            .any(|ext| id.ends_with(ext));
+    }
+    // Registered app IDs (including packaged apps) are not filesystem paths.
+    ![
+        ".chm", ".url", ".html", ".htm", ".pdf", ".txt", ".ini", ".docx", ".xlsx",
+    ]
+    .iter()
+    .any(|ext| id.ends_with(ext))
+}
+fn refresh_apps(app: &AppHandle) -> Result<(), String> {
+    let state = app.state::<Launcher>();
+    if state.refreshing.swap(true, Ordering::SeqCst) {
+        return Ok(());
+    }
+    let result = (|| {
+        // Only Start registrations are scanned. Filter help/document shortcuts that Windows also lists.
+        let output = Command::new("powershell.exe").args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+            "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); $ErrorActionPreference='Stop'; ConvertTo-Json -Compress -InputObject @(Get-StartApps | ForEach-Object { @{ id=$_.AppID; name=$_.Name } })"])
+            .creation_flags(0x08000000).output().map_err(|e| e.to_string())?;
+        if !output.status.success() {
+            return Err(format!(
+                "Couldn't refresh installed apps: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        let mut apps: Vec<InstalledApp> = serde_json::from_slice(&output.stdout)
+            .map_err(|e| format!("Couldn't read installed apps: {e}"))?;
+        apps.retain(is_application);
+        apps.sort_by_cached_key(|a| a.name.to_lowercase());
+        let mut ids = std::collections::HashSet::new();
+        apps.retain(|app| ids.insert(app.id.clone()));
+        populate_icons(&mut apps);
+        std::fs::write(
+            data_path(app, "launcher-apps.json")?,
+            serde_json::to_vec(&apps).map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?;
+        *state.apps.lock().unwrap() = apps.clone();
+        let _ = app.emit("launcher://apps", apps);
+        Ok(())
+    })();
+    state.refreshing.store(false, Ordering::SeqCst);
+    result
+}
+
+fn populate_icons(apps: &mut [InstalledApp]) {
+    use windows::Win32::System::Com::*;
+    unsafe {
+        if CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_err() {
+            return;
+        }
+        for app in apps {
+            app.icon = installed_icon(&app.id);
+        }
+        CoUninitialize();
+    }
+}
+
+fn installed_icon(id: &str) -> Option<String> {
+    use base64::Engine;
+    use windows::{
+        Win32::{Foundation::SIZE, Graphics::Gdi::*, UI::Shell::*},
+        core::PCWSTR,
+    };
+    unsafe {
+        let path: Vec<u16> = format!("shell:AppsFolder\\{id}")
+            .encode_utf16()
+            .chain(Some(0))
+            .collect();
+        let factory: IShellItemImageFactory =
+            SHCreateItemFromParsingName(PCWSTR(path.as_ptr()), None).ok()?;
+        let bitmap = factory
+            .GetImage(
+                SIZE { cx: 32, cy: 32 },
+                SIIGBF_ICONONLY | SIIGBF_BIGGERSIZEOK,
+            )
+            .ok()?;
+        let mut object = BITMAP::default();
+        if GetObjectW(
+            bitmap.into(),
+            std::mem::size_of::<BITMAP>() as i32,
+            Some((&mut object as *mut BITMAP).cast()),
+        ) == 0
+        {
+            let _ = DeleteObject(bitmap.into());
+            return None;
+        }
+        let width = object.bmWidth;
+        let height = object.bmHeight.abs();
+        if width <= 0 || height <= 0 || width > 512 || height > 512 {
+            let _ = DeleteObject(bitmap.into());
+            return None;
+        }
+        let dc = CreateCompatibleDC(None);
+        let mut info = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: width,
+                biHeight: -height,
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut rgba = vec![0u8; width as usize * height as usize * 4];
+        let lines = GetDIBits(
+            dc,
+            bitmap,
+            0,
+            height as u32,
+            Some(rgba.as_mut_ptr().cast()),
+            &mut info,
+            DIB_RGB_COLORS,
+        );
+        let _ = DeleteDC(dc);
+        let _ = DeleteObject(bitmap.into());
+        if lines != height {
+            return None;
+        }
+        let has_alpha = rgba.chunks_exact(4).any(|p| p[3] != 0);
+        for pixel in rgba.chunks_exact_mut(4) {
+            pixel.swap(0, 2);
+            if !has_alpha {
+                pixel[3] = 255;
+            } else if pixel[3] > 0 {
+                for i in 0..3 {
+                    pixel[i] = ((pixel[i] as u32 * 255) / pixel[3] as u32).min(255) as u8;
+                }
+            }
+        }
+        let mut bytes = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut bytes, width as u32, height as u32);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder.write_header().ok()?.write_image_data(&rgba).ok()?;
+        }
+        Some(format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(bytes)
+        ))
+    }
+}
+#[tauri::command]
+pub fn launcher_apps(app: AppHandle) -> Vec<InstalledApp> {
+    app.state::<Launcher>().apps.lock().unwrap().clone()
+}
+#[tauri::command]
+pub async fn refresh_launcher_apps(app: AppHandle) -> Result<Vec<InstalledApp>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        refresh_apps(&app)?;
+        Ok(launcher_apps(app))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub fn launcher_ready(app: AppHandle) -> String {
+    READY.store(true, Ordering::Relaxed);
+    app.state::<Launcher>().mode.lock().unwrap().clone()
+}
+fn show(app: &AppHandle, mode: &str) -> Result<(), String> {
+    let window = app
+        .get_webview_window(LABEL)
+        .ok_or("Command menu isn't ready")?;
+    if !READY.load(Ordering::Relaxed) {
+        return Err("Command menu is loading. Try again shortly.".into());
+    }
+    if mode == "apps" && window.is_visible().unwrap_or(false) {
+        return window.hide().map_err(|e| e.to_string());
+    }
+    let foreground = unsafe { GetForegroundWindow() };
+    if window.hwnd().map_err(|e| e.to_string())? != foreground {
+        let mut pid = 0;
+        unsafe {
+            GetWindowThreadProcessId(foreground, Some(&mut pid));
+        }
+        *app.state::<Launcher>().target.lock().unwrap() = (foreground.0 as usize, pid);
+    }
+    *app.state::<Launcher>().mode.lock().unwrap() = mode.to_owned();
+    // Center on the current monitor, with space for the whole menu on small displays.
+    if let Ok(Some(monitor)) = window.current_monitor() {
+        let scale = monitor.scale_factor();
+        let size = monitor.size();
+        let width = 720f64.min(size.width as f64 / scale - 32.).max(320.);
+        let height = 510f64.min(size.height as f64 / scale - 64.).max(240.);
+        let _ = window.set_size(tauri::LogicalSize::new(width, height));
+    }
+    let _ = window.center();
+    window.show().map_err(|e| e.to_string())?;
+    window.set_focus().map_err(|e| e.to_string())?;
+    window
+        .emit("launcher://open", mode)
+        .map_err(|e| e.to_string())
+}
+#[tauri::command]
+pub fn open_launcher(app: AppHandle, mode: Option<String>) -> Result<(), String> {
+    show(
+        &app,
+        if mode.as_deref() == Some("clipboard") {
+            "clipboard"
+        } else {
+            "apps"
+        },
+    )
+}
+#[tauri::command]
+pub fn close_launcher(app: AppHandle) -> Result<(), String> {
+    app.get_webview_window(LABEL)
+        .ok_or("Command menu unavailable")?
+        .hide()
+        .map_err(|e| e.to_string())
+}
+#[tauri::command]
+pub fn launch_app(app: AppHandle, id: String) -> Result<(), String> {
+    if !app
+        .state::<Launcher>()
+        .apps
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|a| a.id == id)
+    {
+        return Err("App is no longer in the index. Refresh apps and try again.".into());
+    }
+    launch_registered_app(&id)?;
+    close_launcher(app)
+}
+
+pub(crate) fn launch_registered_app(id: &str) -> Result<(), String> {
+    Command::new("explorer.exe")
+        .arg(format!("shell:AppsFolder\\{id}"))
+        .creation_flags(0x08000000)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+#[tauri::command]
+pub fn launcher_search(app: AppHandle, engine: String, query: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let base = match engine.as_str() {
+        "g" => "https://www.google.com/search?q=",
+        "y" => "https://www.youtube.com/results?search_query=",
+        "d" => "https://duckduckgo.com/?q=",
+        "w" => "https://en.wikipedia.org/w/index.php?search=",
+        "gh" => "https://github.com/search?q=",
+        "r" => "https://www.reddit.com/search/?q=",
+        _ => return Err("Unknown search shortcut".into()),
+    };
+    let query = query.trim();
+    if query.is_empty() {
+        return Err("Type something to search for".into());
+    }
+    let encoded: String = query
+        .bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) {
+                (b as char).to_string()
+            } else {
+                format!("%{b:02X}")
+            }
+        })
+        .collect();
+    app.opener()
+        .open_url(format!("{base}{encoded}"), None::<&str>)
+        .map_err(|e| e.to_string())?;
+    close_launcher(app)
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreferenceStatus {
+    ctrl_space: bool,
+    clipboard: bool,
+    shortcut_error: Option<String>,
+}
+#[tauri::command]
+pub fn launcher_preferences(app: AppHandle) -> PreferenceStatus {
+    PreferenceStatus {
+        ctrl_space: CTRL_SPACE.load(Ordering::Relaxed),
+        clipboard: CAPTURE.load(Ordering::Relaxed),
+        shortcut_error: app
+            .state::<Launcher>()
+            .shortcut_error
+            .lock()
+            .unwrap()
+            .clone(),
+    }
+}
+#[tauri::command]
+pub fn set_launcher_preferences(app: AppHandle, preferences: Preferences) -> Result<(), String> {
+    std::fs::write(
+        data_path(&app, "launcher-preferences.json")?,
+        serde_json::to_vec(&preferences).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    CTRL_SPACE.store(preferences.ctrl_space, Ordering::Relaxed);
+    let thread_id = HOTKEY_THREAD.load(Ordering::Relaxed);
+    if thread_id != 0 {
+        unsafe {
+            let _ = PostThreadMessageW(thread_id, WM_APP, WPARAM(0), LPARAM(0));
+        }
+    }
+    CAPTURE.store(preferences.clipboard, Ordering::Relaxed);
+    let _ = app.emit("launcher://preferences", launcher_preferences(app.clone()));
+    Ok(())
+}
+
+fn key(vk: VIRTUAL_KEY, up: bool) -> INPUT {
+    INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: vk,
+                dwFlags: if up {
+                    KEYEVENTF_KEYUP
+                } else {
+                    KEYBD_EVENT_FLAGS(0)
+                },
+                dwExtraInfo: INPUT_TAG,
+                ..Default::default()
+            },
+        },
+    }
+}
+fn request_open(mode: &'static str) {
+    if let Some(tx) = OPEN.get() {
+        let _ = tx.send(mode);
+    }
+}
+fn configure_ctrl_space(app: &AppHandle, registered: &mut bool) {
+    if *registered {
+        unsafe {
+            let _ = UnregisterHotKey(None, 1);
+        }
+        *registered = false;
+    }
+    let error = if CTRL_SPACE.load(Ordering::Relaxed) {
+        match unsafe { RegisterHotKey(None, 1, MOD_CONTROL | MOD_NOREPEAT, VK_SPACE.0 as u32) } {
+            Ok(()) => {
+                *registered = true;
+                None
+            }
+            Err(error) => Some(format!(
+                "Ctrl+Space is unavailable (another app may use it): {error}"
+            )),
+        }
+    } else {
+        None
+    };
+    *app.state::<Launcher>().shortcut_error.lock().unwrap() = error;
+    let _ = app.emit("launcher://preferences", launcher_preferences(app.clone()));
+}
+fn spawn_hotkey(app: AppHandle) {
+    thread::spawn(move || unsafe {
+        let mut msg = MSG::default();
+        // Both shortcuts are owned by this message thread.
+        let _ = PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE);
+        HOTKEY_THREAD.store(GetCurrentThreadId(), Ordering::Relaxed);
+        let mut registered = false;
+        configure_ctrl_space(&app, &mut registered);
+        let workspace_registered =
+            match RegisterHotKey(None, 2, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, b'W' as u32) {
+                Ok(()) => true,
+                Err(error) => {
+                    eprintln!("wallp: Ctrl+Alt+W is unavailable (another app may use it): {error}");
+                    false
+                }
+            };
+        while GetMessageW(&mut msg, None, 0, 0).0 > 0 {
+            if msg.message == WM_HOTKEY && msg.wParam.0 == 2 {
+                let handle = app.clone();
+                let _ = app.run_on_main_thread(move || {
+                    if let Err(error) = crate::taskbar::show_wallp_desktop(handle, true) {
+                        eprintln!("wallp: couldn't open workspace: {error}");
+                    }
+                });
+                continue;
+            }
+            if msg.message == WM_HOTKEY && msg.wParam.0 == 1 {
+                if READY.load(Ordering::Relaxed) {
+                    request_open("apps");
+                }
+                continue;
+            }
+            if msg.message == WM_APP {
+                configure_ctrl_space(&app, &mut registered);
+                continue;
+            }
+            let _ = TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+        HOTKEY_THREAD.store(0, Ordering::Relaxed);
+        if workspace_registered {
+            let _ = UnregisterHotKey(None, 2);
+        }
+        if registered {
+            let _ = UnregisterHotKey(None, 1);
+        }
+    });
+}
+
+enum Capture {
+    Text(String),
+    Image,
+}
+
+// Clipboard handles remain owned by Windows. Always unlock and close before returning.
+unsafe fn clipboard_content() -> Result<Option<Capture>, String> {
+    unsafe {
+        OpenClipboard(None).map_err(|e| e.to_string())?;
+        let result = (|| {
+            let excluded =
+                RegisterClipboardFormatW(w!("ExcludeClipboardContentFromMonitorProcessing"));
+            if excluded != 0 && IsClipboardFormatAvailable(excluded).is_ok() {
+                return Ok(None);
+            }
+            let history = RegisterClipboardFormatW(w!("CanIncludeInClipboardHistory"));
+            if let Ok(handle) = GetClipboardData(history) {
+                let handle = HGLOBAL(handle.0);
+                let ptr = GlobalLock(handle);
+                if !ptr.is_null() {
+                    let blocked =
+                        GlobalSize(handle) >= 4 && std::ptr::read_unaligned(ptr as *const u32) == 0;
+                    let _ = GlobalUnlock(handle);
+                    if blocked {
+                        return Ok(None);
+                    }
+                }
+            }
+            if [2, 8, 17]
+                .iter()
+                .any(|format| IsClipboardFormatAvailable(*format).is_ok())
+            {
+                return Ok(Some(Capture::Image));
+            }
+            let Ok(handle) = GetClipboardData(13) else {
+                return Ok(None);
+            };
+            let handle = HGLOBAL(handle.0);
+            let len = GlobalSize(handle) / 2;
+            if len == 0 || len > TEXT_LIMIT + 1 {
+                return Ok(None);
+            }
+            let ptr = GlobalLock(handle) as *const u16;
+            if ptr.is_null() {
+                return Err("Couldn't read clipboard".into());
+            }
+            let slice = std::slice::from_raw_parts(ptr, len);
+            let end = slice.iter().position(|v| *v == 0).unwrap_or(len);
+            let text = String::from_utf16_lossy(&slice[..end]);
+            let _ = GlobalUnlock(handle);
+            Ok(if text.trim().is_empty() {
+                None
+            } else {
+                Some(Capture::Text(text))
+            })
+        })();
+        let _ = CloseClipboard();
+        result
+    }
+}
+fn spawn_clipboard(app: AppHandle) {
+    thread::spawn(move || {
+        let mut sequence = unsafe { GetClipboardSequenceNumber() };
+        loop {
+            thread::sleep(Duration::from_millis(250));
+            let current = unsafe { GetClipboardSequenceNumber() };
+            if !CAPTURE.load(Ordering::Relaxed) {
+                sequence = current;
+                continue;
+            }
+            if current == sequence {
+                continue;
+            }
+            let capture = (|| -> Result<Option<Content>, String> {
+                let content = unsafe { clipboard_content() }?;
+                let content = match content {
+                    Some(Capture::Image) => {
+                        let image = arboard::Clipboard::new()
+                            .map_err(|e| e.to_string())?
+                            .get_image()
+                            .map_err(|e| e.to_string())?;
+                        let width = u32::try_from(image.width).map_err(|e| e.to_string())?;
+                        let height = u32::try_from(image.height).map_err(|e| e.to_string())?;
+                        let image =
+                            image::RgbaImage::from_raw(width, height, image.bytes.into_owned())
+                                .ok_or("Invalid clipboard image")?;
+                        Some(Content::Image(image))
+                    }
+                    Some(Capture::Text(text)) => Some(Content::Text(text)),
+                    None => None,
+                };
+                // Privacy markers and payload must belong to the same clipboard revision.
+                if unsafe { GetClipboardSequenceNumber() } != current {
+                    return Ok(None);
+                }
+                Ok(content)
+            })();
+            if let Ok(content) = capture {
+                sequence = current;
+                if let Some(content) = content {
+                    let state = app.state::<Launcher>();
+                    let mut history = state.history.lock().unwrap();
+                    let result = history
+                        .as_mut()
+                        .ok_or("History unavailable".to_string())
+                        .and_then(|h| h.remember(content));
+                    drop(history);
+                    match result {
+                        Ok(()) => {
+                            let _ = app.emit("launcher://clipboard", ());
+                        }
+                        Err(error) => {
+                            let _ = app.emit(
+                                "launcher://error",
+                                format!("Couldn't save clipboard history: {error}"),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clipboard_image_preserves_orientation_colors_and_alpha() {
+        let image = image::RgbaImage::from_raw(1, 2, vec![255, 0, 0, 128, 0, 0, 255, 255]).unwrap();
+        let formats = clipboard_image_formats(image.clone()).unwrap();
+        let decoded = image::load_from_memory_with_format(&formats[0].1, image::ImageFormat::Png)
+            .unwrap()
+            .to_rgba8();
+        assert_eq!(decoded, image);
+        assert_eq!(formats[1].0, 17);
+        let dib = &formats[1].1;
+        assert_eq!(i32::from_le_bytes(dib[4..8].try_into().unwrap()), 1);
+        assert_eq!(i32::from_le_bytes(dib[8..12].try_into().unwrap()), 2);
+        assert_eq!(&dib[124..], &[255, 0, 0, 255, 0, 0, 255, 128]);
+    }
+
+    #[test]
+    fn windows_app_registration_provides_a_png_icon() {
+        let output = Command::new("powershell.exe")
+            .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+                "[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false); ConvertTo-Json -Compress -InputObject @(Get-StartApps | Select-Object -First 10 | ForEach-Object { @{ id=$_.AppID; name=$_.Name } })"])
+            .creation_flags(0x08000000).output().unwrap();
+        assert!(output.status.success());
+        let mut apps: Vec<InstalledApp> = serde_json::from_slice(&output.stdout).unwrap();
+        populate_icons(&mut apps);
+        let icons: Vec<_> = apps.iter().filter_map(|app| app.icon.as_ref()).collect();
+        assert!(
+            !icons.is_empty(),
+            "Windows should return an icon for installed apps"
+        );
+        use base64::Engine;
+        for icon in icons {
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(icon.strip_prefix("data:image/png;base64,").unwrap())
+                .unwrap();
+            assert!(image::load_from_memory_with_format(&bytes, image::ImageFormat::Png).is_ok());
+        }
+    }
+
+    #[test]
+    fn old_preferences_migrate_to_ctrl_space_without_windows_overrides() {
+        let preferences: Preferences =
+            serde_json::from_str(r#"{"replaceStart":true,"clipboard":false}"#).unwrap();
+        assert!(preferences.ctrl_space);
+        assert!(!preferences.clipboard);
+        let saved = serde_json::to_value(preferences).unwrap();
+        assert_eq!(saved["ctrlSpace"], true);
+        assert!(saved.get("replaceStart").is_none());
+    }
+
+    #[test]
+    fn index_excludes_documents_and_web_shortcuts_but_keeps_apps() {
+        for id in [
+            r"{known-folder}\7-Zip\7-zip.chm",
+            r"C:\Apps\readme.txt",
+            r"C:\Apps\manual.pdf",
+            r"C:\Apps\help.url",
+            r"http:\docs.example.com\readme",
+            "https://example.com/help",
+            "file:///C:/notes.txt",
+        ] {
+            assert!(
+                !is_application(&InstalledApp {
+                    id: id.into(),
+                    name: "Shortcut".into(),
+                    icon: None
+                }),
+                "{id}"
+            );
+        }
+        for id in [
+            r"{known-folder}\7-Zip\7zFM.exe",
+            r"C:\Apps\tools.msc",
+            "com.t3tools.t3code",
+            "Microsoft.WindowsCalculator_8wekyb3d8bbwe!App",
+            "steam://rungameid/123",
+            "battlenet://game/auks",
+        ] {
+            assert!(
+                is_application(&InstalledApp {
+                    id: id.into(),
+                    name: "App".into(),
+                    icon: None
+                }),
+                "{id}"
+            );
+        }
+    }
+}
+#[tauri::command]
+pub async fn clipboard_entries(
+    app: AppHandle,
+    query: Option<String>,
+    offset: Option<u64>,
+) -> Result<Page, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<Launcher>();
+        let history = state.history.lock().unwrap();
+        history
+            .as_ref()
+            .ok_or("History unavailable")?
+            .page(&query.unwrap_or_default(), offset.unwrap_or(0))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn clear_clipboard_history(app: AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<Launcher>();
+        state
+            .history
+            .lock()
+            .unwrap()
+            .as_ref()
+            .ok_or("History unavailable")?
+            .clear()?;
+        let _ = app.emit("launcher://clipboard", ());
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+unsafe fn write_clipboard_formats(owner: HWND, formats: &[(u32, Vec<u8>)]) -> Result<(), String> {
+    unsafe {
+        for attempt in 0..6 {
+            match OpenClipboard(Some(owner)) {
+                Ok(()) => break,
+                Err(error) if attempt == 5 => return Err(error.to_string()),
+                Err(_) => thread::sleep(Duration::from_millis(5)),
+            }
+        }
+        let result = (|| {
+            EmptyClipboard().map_err(|e| e.to_string())?;
+            for (format, bytes) in formats {
+                let memory = GlobalAlloc(GMEM_MOVEABLE, bytes.len()).map_err(|e| e.to_string())?;
+                let ptr = GlobalLock(memory) as *mut u8;
+                if ptr.is_null() {
+                    let _ = GlobalFree(Some(memory));
+                    return Err("Couldn't write clipboard".into());
+                }
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, bytes.len());
+                let _ = GlobalUnlock(memory);
+                if let Err(err) = SetClipboardData(*format, Some(HANDLE(memory.0))) {
+                    let _ = GlobalFree(Some(memory));
+                    return Err(err.to_string());
+                }
+            } // Windows now owns each successful allocation.
+            Ok(())
+        })();
+        let _ = CloseClipboard();
+        result
+    }
+}
+fn clipboard_image_formats(image: image::RgbaImage) -> Result<Vec<(u32, Vec<u8>)>, String> {
+    use windows::Win32::Graphics::Gdi::{BI_BITFIELDS, BITMAPV5HEADER, LCS_GM_IMAGES};
+    let width = i32::try_from(image.width()).map_err(|e| e.to_string())?;
+    let height = i32::try_from(image.height()).map_err(|e| e.to_string())?;
+    if width == 0 || height == 0 {
+        return Err("Cannot copy an empty image".into());
+    }
+    let size = u32::try_from(image.as_raw().len()).map_err(|e| e.to_string())?;
+    let mut png = std::io::Cursor::new(Vec::new());
+    image
+        .write_to(&mut png, image::ImageFormat::Png)
+        .map_err(|e| e.to_string())?;
+    let png_format = unsafe { RegisterClipboardFormatW(w!("PNG")) };
+    if png_format == 0 {
+        return Err("Couldn't register PNG clipboard format".into());
+    }
+    let header = BITMAPV5HEADER {
+        bV5Size: std::mem::size_of::<BITMAPV5HEADER>() as u32,
+        bV5Width: width,
+        bV5Height: height,
+        bV5Planes: 1,
+        bV5BitCount: 32,
+        bV5Compression: BI_BITFIELDS,
+        bV5SizeImage: size,
+        bV5RedMask: 0x00ff0000,
+        bV5GreenMask: 0x0000ff00,
+        bV5BlueMask: 0x000000ff,
+        bV5AlphaMask: 0xff000000,
+        bV5CSType: 0x73524742, // LCS_sRGB
+        bV5Intent: LCS_GM_IMAGES as u32,
+        ..Default::default()
+    };
+    let mut dib = unsafe {
+        std::slice::from_raw_parts(
+            &header as *const BITMAPV5HEADER as *const u8,
+            std::mem::size_of::<BITMAPV5HEADER>(),
+        )
+        .to_vec()
+    };
+    // Positive height and bottom-up BGRA pixels also work in Word/WordPad.
+    for row in image.rows().rev() {
+        for pixel in row {
+            let [r, g, b, a] = pixel.0;
+            dib.extend_from_slice(&[b, g, r, a]);
+        }
+    }
+    Ok(vec![(png_format, png.into_inner()), (17, dib)]) // CF_DIBV5
+}
+#[tauri::command]
+pub async fn paste_clipboard(app: AppHandle, id: i64) -> Result<(), String> {
+    let handle = app.clone();
+    let content = tauri::async_runtime::spawn_blocking(move || {
+        let state = handle.state::<Launcher>();
+        state
+            .history
+            .lock()
+            .unwrap()
+            .as_ref()
+            .ok_or("History unavailable")?
+            .get(id)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    let window = app
+        .get_webview_window(LABEL)
+        .ok_or("Command menu unavailable")?;
+    let owner = window.hwnd().map_err(|e| e.to_string())?.0 as isize;
+    tauri::async_runtime::spawn_blocking(move || {
+        let formats = match content {
+            Content::Text(text) => vec![(
+                13,
+                text.encode_utf16()
+                    .chain(Some(0))
+                    .flat_map(u16::to_le_bytes)
+                    .collect(),
+            )],
+            Content::Image(image) => clipboard_image_formats(image)?,
+        };
+        // Images need the same valid owner HWND as text. Opening with NULL and
+        // emptying the clipboard leaves no owner and can make SetClipboardData fail.
+        unsafe { write_clipboard_formats(HWND(owner as *mut _), &formats) }
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    let (target, target_pid) = *app.state::<Launcher>().target.lock().unwrap();
+    close_launcher(app)?;
+    tauri::async_runtime::spawn_blocking(move || unsafe {
+        let target = HWND(target as *mut _);
+        let mut pid = 0;
+        GetWindowThreadProcessId(target, Some(&mut pid));
+        if target.0.is_null() || !IsWindow(Some(target)).as_bool() || pid != target_pid {
+            return Err("Copied. The original app closed; use Ctrl+V to paste elsewhere.".into());
+        }
+        if pid == std::process::id() {
+            return Err("Copied. Focus the app you want and press Ctrl+V to paste.".into());
+        }
+        let _ = SetForegroundWindow(target);
+        // Never inject paste while a shortcut modifier is held or into the wrong app.
+        for _ in 0..40 {
+            thread::sleep(Duration::from_millis(25));
+            if [VK_LWIN, VK_RWIN, VK_CONTROL, VK_MENU, VK_SHIFT]
+                .iter()
+                .all(|v| GetAsyncKeyState(v.0 as i32) >= 0)
+            {
+                if GetForegroundWindow() != target {
+                    return Err(
+                        "Copied. Windows couldn't focus the original app; use Ctrl+V to paste."
+                            .into(),
+                    );
+                }
+                let inputs = [
+                    key(VK_CONTROL, false),
+                    key(VK_V, false),
+                    key(VK_V, true),
+                    key(VK_CONTROL, true),
+                ];
+                if SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) != inputs.len() as u32 {
+                    return Err(
+                        "Copied. Automatic paste was blocked; use Ctrl+V in the target app.".into(),
+                    );
+                }
+                return Ok(());
+            }
+        }
+        Err("Copied. Release the shortcut keys and press Ctrl+V to paste.".into())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
