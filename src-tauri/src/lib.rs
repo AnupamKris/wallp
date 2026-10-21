@@ -10,6 +10,7 @@ mod gmail;
 mod home_shortcuts;
 mod launcher;
 mod mail_cache;
+mod power;
 mod taskbar;
 mod tray_apps;
 pub use taskbar::recovery_entry;
@@ -290,6 +291,7 @@ pub fn run() {
             launcher::launcher_apps,
             launcher::refresh_launcher_apps,
             launcher::launch_app,
+            power::launcher_power,
             home_shortcuts::home_shortcuts,
             home_shortcuts::set_home_shortcut,
             home_shortcuts::launch_home_shortcut,

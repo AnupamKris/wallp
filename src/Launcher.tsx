@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { ArrowLeftIcon, ArrowRightIcon, ClipboardTextIcon, MagnifyingGlassIcon, ArrowClockwiseIcon, TrashIcon, ImageIcon, CommandIcon, SparkleIcon, PushPinIcon } from "@phosphor-icons/react";
+import { ArrowLeftIcon, ArrowRightIcon, ClipboardTextIcon, MagnifyingGlassIcon, ArrowClockwiseIcon, TrashIcon, ImageIcon, CommandIcon, SparkleIcon, PushPinIcon, PowerIcon, MoonIcon } from "@phosphor-icons/react";
 import { useHomeShortcuts } from "./home-shortcuts";
-import { engines, isClipboardCommand, parseBang, searchApps, type InstalledApp } from "./launcher-search";
+import { engines, isClipboardCommand, parseBang, searchApps, searchPowerCommands, type InstalledApp, type PowerAction } from "./launcher-search";
 import "./Launcher.css";
 import { AiMarkdown } from "./AiMarkdown";
 import { runAiTools, type AiResponse } from "./ai-tools";
@@ -14,7 +14,7 @@ type AiMessage = { role: "user" | "assistant"; content: string };
 type ChatSummary = { id: string; title: string; updatedAt: number };
 type Preferences = { ctrlSpace: boolean; clipboard: boolean; shortcutError?: string | null };
 const initialPreferences: Preferences = { ctrlSpace: true, clipboard: true };
-type Result = { id: string; title: string; detail: string; kind: "app" | "clipboard" | "clip" | "search" | "ai"; app?: InstalledApp; clip?: Clip; engine?: string; query?: string };
+type Result = { id: string; title: string; detail: string; kind: "app" | "clipboard" | "clip" | "search" | "ai" | "power"; app?: InstalledApp; clip?: Clip; engine?: string; query?: string; action?: PowerAction };
 
 export function Launcher() {
   const [apps, setApps] = useState<InstalledApp[]>([]);
@@ -133,6 +133,7 @@ export function Launcher() {
     : bang
       ? [{ id: "bang", title: bang.query ? `Search ${bang.name} for “${bang.query}”` : `Type a ${bang.name} search`, detail: `${bang.key} · ${bang.name}`, kind: "search", engine: bang.key, query: bang.query }]
       : [
+        ...searchPowerCommands(query).map(command => ({ id: `power-${command.action}`, title: command.title, detail: command.detail, kind: "power" as const, action: command.action })),
         ...(isClipboardCommand(query) || !query.trim() ? [{ id: "clipboard", title: "Paste from clipboard history", detail: `${clipTotal.toLocaleString()} copied items · Type paste`, kind: "clipboard" as const }] : []),
         ...searchApps(apps, query).map(app => ({ id: app.id, title: app.name, detail: "Application", kind: "app" as const, app })),
         ...(query.trim() && !isClipboardCommand(query) ? [{ id: "google", title: `Search Google for “${query.trim()}”`, detail: "Web search", kind: "search" as const, engine: "g", query: query.trim() }] : []),
@@ -230,14 +231,16 @@ export function Launcher() {
     if (!result || busy || aiHistoryLoading) return;
     if (result.kind === "ai") { if (aiHistoryOpen) { ++historyRequest.current; setAiHistoryOpen(false); } await askAi(result.query ?? ""); return; }
     if (result.kind === "clipboard") { open("clipboard"); return; }
-    if (!isTauri()) { setError("Open wallp on your desktop to launch apps, search, or paste."); return; }
+    if (!isTauri()) { setError("Open wallp on your desktop to run commands."); return; }
     setBusy(true); setError("");
     try {
+      if (result.kind === "power") await invoke("launcher_power", { action: result.action });
       if (result.kind === "app") await invoke("launch_app", { id: result.app!.id });
       if (result.kind === "search") await invoke("launcher_search", { engine: result.engine, query: result.query });
       if (result.kind === "clip") await invoke("paste_clipboard", { id: result.clip!.id });
     } catch (err) {
       if (result.kind === "clip") await invoke("open_launcher", { mode: "clipboard" }).catch(() => {});
+      if (result.kind === "power" && result.action === "sleep") await invoke("open_launcher").catch(() => {});
       setError(String(err));
     } finally { setBusy(false); }
   }
@@ -276,7 +279,7 @@ export function Launcher() {
     {error && <p className="command-error" role="alert">{error}</p>}
     <div ref={list} id="command-results" className="command-results" role="listbox" aria-label={mode === "clipboard" ? "Copied text and images" : "Apps and commands"} aria-busy={busy || loading || clipLoading || aiLoading}>
       {results.map((result, index) => <div key={result.id} id={`command-result-${index}`} className={`command-result${result.kind === "clip" ? " clipboard-result" : ""}`} role="option" aria-selected={index === activeIndex} onMouseMove={() => setSelected(index)} onMouseDown={event => event.preventDefault()} onClick={() => void run(result)}>
-        <span className={`command-result-icon ${result.kind}`} aria-hidden="true">{result.kind === "app" && result.app?.icon ? <img src={result.app.icon} alt="" onError={event => { event.currentTarget.style.display = "none"; }} /> : result.clip?.preview ? <img className="clipboard-thumbnail" src={result.clip.preview} alt="" /> : result.kind === "app" ? result.title.slice(0, 2).toUpperCase() : result.kind === "ai" ? <SparkleIcon /> : result.kind === "search" ? <MagnifyingGlassIcon /> : result.clip?.kind === "image" ? <ImageIcon /> : <ClipboardTextIcon />}</span>
+        <span className={`command-result-icon ${result.kind}`} aria-hidden="true">{result.kind === "app" && result.app?.icon ? <img src={result.app.icon} alt="" onError={event => { event.currentTarget.style.display = "none"; }} /> : result.clip?.preview ? <img className="clipboard-thumbnail" src={result.clip.preview} alt="" /> : result.kind === "app" ? result.title.slice(0, 2).toUpperCase() : result.kind === "power" ? result.action === "restart" ? <ArrowClockwiseIcon /> : result.action === "sleep" ? <MoonIcon /> : <PowerIcon /> : result.kind === "ai" ? <SparkleIcon /> : result.kind === "search" ? <MagnifyingGlassIcon /> : result.clip?.kind === "image" ? <ImageIcon /> : <ClipboardTextIcon />}</span>
         <span className="command-result-copy"><strong>{result.title}</strong><small>{result.detail}</small></span>
         {result.app && <button className="command-pin" disabled={savingPin || !isTauri()} aria-pressed={pinnedIds.has(result.app.id)} aria-label={`${pinnedIds.has(result.app.id) ? "Unpin" : "Pin"} ${result.title} ${pinnedIds.has(result.app.id) ? "from" : "to"} Home`} title={pinnedIds.has(result.app.id) ? "Remove from Home (Ctrl+Enter)" : "Pin to Home (Ctrl+Enter)"} onClick={event => { event.stopPropagation(); void setPinned(result.app!.id, !pinnedIds.has(result.app!.id)); }}><PushPinIcon size={18} weight={pinnedIds.has(result.app.id) ? "fill" : "regular"} /></button>}
         <ArrowRightIcon className="command-result-arrow" />

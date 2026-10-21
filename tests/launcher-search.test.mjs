@@ -1,6 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseBang, searchApps, isClipboardCommand } from '../src/launcher-search.ts';
+import { parseBang, searchApps, isClipboardCommand, searchPowerCommands } from '../src/launcher-search.ts';
+
+test('power commands match typed commands and prefixes without capturing unrelated searches', () => {
+  for (const query of ['power off', ' POWER   OFF ', 'shutdown', 'shut down']) {
+    assert.equal(searchPowerCommands(query)[0]?.action, 'power_off');
+  }
+  assert.equal(searchPowerCommands('restart')[0]?.action, 'restart');
+  assert.equal(searchPowerCommands('Sleep')[0]?.action, 'sleep');
+  assert.equal(searchPowerCommands('pow')[0]?.action, 'power_off');
+  for (const query of ['', '  ', 'sleep music', 'restart guide', 'g power off', 'powershell']) {
+    assert.deepEqual(searchPowerCommands(query), []);
+  }
+});
 
 test('search shortcuts require a prefix and preserve the search query', () => {
   assert.deepEqual(parseBang('g rust & windows'), { key: 'g', name: 'Google', query: 'rust & windows' });

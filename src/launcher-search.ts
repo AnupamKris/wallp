@@ -1,4 +1,14 @@
 export type InstalledApp = { id: string; name: string; icon?: string | null };
+export const powerCommands = [
+  { action: "power_off", title: "Power off", detail: "Shut down the PC", aliases: ["power off", "shutdown", "shut down"] },
+  { action: "restart", title: "Restart", detail: "Restart the PC", aliases: ["restart"] },
+  { action: "sleep", title: "Sleep", detail: "Put the PC to sleep", aliases: ["sleep"] },
+] as const;
+export type PowerAction = typeof powerCommands[number]["action"];
+export function searchPowerCommands(query: string) {
+  const phrase = query.trim().toLowerCase().replace(/\s+/g, " ");
+  return phrase ? powerCommands.filter(command => command.aliases.some(alias => alias.startsWith(phrase))) : [];
+}
 export const engines = [
   { key: "ai", name: "Ask AI" },
   { key: "g", name: "Google" },
