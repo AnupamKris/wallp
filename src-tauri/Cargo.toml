@@ -1,7 +1,7 @@
 [package]
 name = "wallp"
 version = "0.1.0"
-description = "A desktop UI that lives inside the Windows desktop, behind the icons"
+description = "A desktop UI that lives inside the Windows or GNOME desktop, behind the icons"
 authors = ["you"]
 edition = "2024"
 
@@ -31,7 +31,6 @@ arboard = "3.6"
 rusqlite = { version = "0.38", features = ["bundled"] }
 sha2 = "0.10"
 image = { version = "0.25", default-features = false, features = ["png"] }
-keyring = { version = "3", features = ["windows-native"] }
 tokio = { version = "1", features = ["net", "io-util", "time", "sync"] }
 futures = "0.3"
 rand = "0.8"
@@ -40,6 +39,7 @@ url = "2"
 # Keep this on the same major as the `windows` crate Tauri uses, so the HWND
 # from `WebviewWindow::hwnd()` is the same type as ours.
 [target.'cfg(windows)'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }
 windows-core = "0.62"
 winreg = "0.55"
 windows = { version = "0.62", features = [
@@ -60,6 +60,17 @@ windows = { version = "0.62", features = [
   "Win32_System_Threading",
   "Win32_System_Diagnostics_ToolHelp",
 ] }
+
+# GNOME on Wayland gives clients no way to sit behind other windows, so wallp
+# runs through XWayland and uses X11 window types (see src/linux/desktop.rs).
+# `gtk` stays on the same version Tauri uses so `gtk_window()` types match.
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
+gtk = "0.18"
+raw-window-handle = "0.6"
+x11rb = { version = "0.13", features = ["xfixes"] }
+dbus = "0.9"
+libc = "0.2"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

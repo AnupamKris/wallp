@@ -11,6 +11,9 @@ pnpm tauri dev      # or: pnpm tauri build
 
 It runs from the tray icon: **Show desktop icons**, **Reload**, **Quit**.
 
+It also runs on GNOME (tested on Zorin OS 18, GNOME 46, Wayland). See
+[Linux (GNOME)](#linux-gnome).
+
 ## Desktop layout
 
 - Left: **This PC** and **Downloads** (uses the Windows Downloads location,
@@ -223,3 +226,37 @@ things:
 - Don't call `set_focus` on the desktop window at startup.
 - Tauri's `show()` resets the window's z-order and extended style. That's
   why `attach_desktop` calls `Attachment::place()` again after showing.
+
+## Linux (GNOME)
+
+Build dependencies (Debian/Ubuntu/Zorin): `libwebkit2gtk-4.1-dev
+libayatana-appindicator3-dev libxdo-dev libdbus-1-dev`. Platform code lives
+in `src-tauri/src/linux/`; `desktop`, `taskbar` and `tray_apps` swap in their
+Linux versions through `#[path]`, and everything Win32 is `cfg(windows)`.
+
+Wayland gives apps no way to sit behind other windows, grab global keys or
+watch the clipboard, so wallp forces XWayland (`GDK_BACKEND=x11` in
+`main.rs`) and uses what Mutter still honours for X11 clients:
+
+- **Desktop layer:** the window is typed `_NET_WM_WINDOW_TYPE_DESKTOP`, so it
+  stays below everything, on every workspace, out of Alt+Tab and Super+D.
+- **Desktop icons:** drawn by a Shell extension (`zorin-desktop-icons`,
+  `ding`, …) that would cover wallp. Hiding icons disables that extension.
+- **Shortcuts:** Ctrl+Space, Ctrl+Alt+W and Ctrl+Alt+D are GNOME custom
+  shortcuts that run `wallp --launcher|--workspace|--desktop`; the single
+  instance plugin forwards them to the running app. Ctrl+Alt+D is taken from
+  GNOME's Show Desktop while wallp runs.
+- **Clipboard history:** XFixes selection events. Password managers' entries
+  are skipped. Choosing an entry **copies** it; press Ctrl+V yourself, since
+  Wayland doesn't let one app type into another.
+- **Tray apps:** StatusNotifierItems from the AppIndicator extension; End
+  task sends SIGKILL.
+- **Not available:** the floating dock (an XWayland app can't see or focus
+  Wayland windows), fullscreen pause, and the Riot Games shortcut.
+
+Quitting, logging out and SIGTERM/SIGINT/SIGHUP give everything back:
+the shortcuts, Ctrl+Alt+D and the icon extension. After a crash or SIGKILL,
+the next start and quit restores them (both are journaled in
+`~/.local/share/com.anupa.wallp/`), or run `gnome-extensions enable
+zorin-desktop-icons@zorinos.com`. `tauri dev` restarts kill the app, and the
+new copy can exit early while the old one is still cleaning up; run it again.

@@ -1,18 +1,20 @@
 //! App-only launcher and persistent text/image clipboard. No filesystem search.
 use crate::clipboard_history::{Content, History, Page};
 use serde::{Deserialize, Serialize};
+#[cfg(windows)]
 use std::{
-    os::windows::process::CommandExt,
-    process::Command,
+    os::windows::process::CommandExt, process::Command, sync::atomic::AtomicU32, time::Duration,
+};
+use std::{
     sync::{
         Mutex, OnceLock,
-        atomic::{AtomicBool, AtomicU32, Ordering},
+        atomic::{AtomicBool, Ordering},
         mpsc,
     },
     thread,
-    time::Duration,
 };
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
+#[cfg(windows)]
 use windows::{
     Win32::{
         Foundation::{GlobalFree, HANDLE, HGLOBAL, HWND, LPARAM, WPARAM},
@@ -24,9 +26,11 @@ use windows::{
 
 const LABEL: &str = "launcher";
 const TEXT_LIMIT: usize = 100_000;
+#[cfg(windows)]
 const INPUT_TAG: usize = 0x57414c50;
 static READY: AtomicBool = AtomicBool::new(false);
 static CAPTURE: AtomicBool = AtomicBool::new(true);
+#[cfg(windows)]
 static HOTKEY_THREAD: AtomicU32 = AtomicU32::new(0);
 static CTRL_SPACE: AtomicBool = AtomicBool::new(true);
 static OPEN: OnceLock<mpsc::Sender<&'static str>> = OnceLock::new();
@@ -57,6 +61,8 @@ pub struct Launcher {
     apps: Mutex<Vec<InstalledApp>>,
     refreshing: AtomicBool,
     history: Mutex<Option<History>>,
+    /// The window and process to paste into.
+    #[cfg(windows)]
     target: Mutex<(usize, u32)>,
     mode: Mutex<String>,
     shortcut_error: Mutex<Option<String>>,
@@ -111,10 +117,13 @@ pub fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         if matches!(event, tauri::WindowEvent::Focused(false)) {
             if let Some(window) = handle.get_webview_window(LABEL) {
                 // A queued blur from the previous hide may arrive after reopening.
-                if window
+                #[cfg(windows)]
+                let blurred = window
                     .hwnd()
-                    .is_ok_and(|hwnd| unsafe { GetForegroundWindow() } != hwnd)
-                {
+                    .is_ok_and(|hwnd| unsafe { GetForegroundWindow() } != hwnd);
+                #[cfg(target_os = "linux")]
+                let blurred = !window.is_focused().unwrap_or(false);
+                if blurred {
                     let _ = window.hide();
                 }
             }
@@ -186,22 +195,12 @@ fn refresh_apps(app: &AppHandle) -> Result<(), String> {
         return Ok(());
     }
     let result = (|| {
-        // Only Start registrations are scanned. Filter help/document shortcuts that Windows also lists.
-        let output = Command::new("powershell.exe").args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
-            "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); $ErrorActionPreference='Stop'; ConvertTo-Json -Compress -InputObject @(Get-StartApps | ForEach-Object { @{ id=$_.AppID; name=$_.Name } })"])
-            .creation_flags(0x08000000).output().map_err(|e| e.to_string())?;
-        if !output.status.success() {
-            return Err(format!(
-                "Couldn't refresh installed apps: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ));
-        }
-        let mut apps: Vec<InstalledApp> = serde_json::from_slice(&output.stdout)
-            .map_err(|e| format!("Couldn't read installed apps: {e}"))?;
+        let mut apps = installed_apps()?;
         apps.retain(is_application);
         apps.sort_by_cached_key(|a| a.name.to_lowercase());
         let mut ids = std::collections::HashSet::new();
         apps.retain(|app| ids.insert(app.id.clone()));
+        #[cfg(windows)]
         populate_icons(&mut apps);
         std::fs::write(
             data_path(app, "launcher-apps.json")?,
@@ -216,6 +215,31 @@ fn refresh_apps(app: &AppHandle) -> Result<(), String> {
     result
 }
 
+/// GNOME's app grid entries, with icons resolved from the icon theme.
+#[cfg(target_os = "linux")]
+fn installed_apps() -> Result<Vec<InstalledApp>, String> {
+    Ok(crate::linux::apps::installed())
+}
+
+#[cfg(windows)]
+fn installed_apps() -> Result<Vec<InstalledApp>, String> {
+    {
+        // Only Start registrations are scanned. Filter help/document shortcuts that Windows also lists.
+        let output = Command::new("powershell.exe").args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+            "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); $ErrorActionPreference='Stop'; ConvertTo-Json -Compress -InputObject @(Get-StartApps | ForEach-Object { @{ id=$_.AppID; name=$_.Name } })"])
+            .creation_flags(0x08000000).output().map_err(|e| e.to_string())?;
+        if !output.status.success() {
+            return Err(format!(
+                "Couldn't refresh installed apps: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        serde_json::from_slice(&output.stdout)
+            .map_err(|e| format!("Couldn't read installed apps: {e}"))
+    }
+}
+
+#[cfg(windows)]
 fn populate_icons(apps: &mut [InstalledApp]) {
     use windows::Win32::System::Com::*;
     unsafe {
@@ -229,6 +253,7 @@ fn populate_icons(apps: &mut [InstalledApp]) {
     }
 }
 
+#[cfg(windows)]
 fn installed_icon(id: &str) -> Option<String> {
     use base64::Engine;
     use windows::{
@@ -344,7 +369,9 @@ fn show(app: &AppHandle, mode: &str) -> Result<(), String> {
     if mode == "apps" && window.is_visible().unwrap_or(false) {
         return window.hide().map_err(|e| e.to_string());
     }
+    #[cfg(windows)]
     let foreground = unsafe { GetForegroundWindow() };
+    #[cfg(windows)]
     if window.hwnd().map_err(|e| e.to_string())? != foreground {
         let mut pid = 0;
         unsafe {
@@ -360,10 +387,23 @@ fn show(app: &AppHandle, mode: &str) -> Result<(), String> {
         let width = 720f64.min(size.width as f64 / scale - 32.).max(320.);
         let height = 510f64.min(size.height as f64 / scale - 64.).max(240.);
         let _ = window.set_size(tauri::LogicalSize::new(width, height));
+        // GTK's center() misplaces hidden windows, so place it ourselves.
+        #[cfg(target_os = "linux")]
+        {
+            let origin = monitor.position();
+            let _ = window.set_position(tauri::PhysicalPosition::new(
+                origin.x + (size.width as f64 - width * scale) as i32 / 2,
+                origin.y + (size.height as f64 - height * scale) as i32 / 2,
+            ));
+        }
     }
+    #[cfg(windows)]
     let _ = window.center();
     window.show().map_err(|e| e.to_string())?;
+    #[cfg(windows)]
     window.set_focus().map_err(|e| e.to_string())?;
+    #[cfg(target_os = "linux")]
+    crate::linux::activate(&window)?;
     window
         .emit("launcher://open", mode)
         .map_err(|e| e.to_string())
@@ -402,6 +442,12 @@ pub fn launch_app(app: AppHandle, id: String) -> Result<(), String> {
     close_launcher(app)
 }
 
+#[cfg(target_os = "linux")]
+pub(crate) fn launch_registered_app(id: &str) -> Result<(), String> {
+    crate::linux::apps::launch(id)
+}
+
+#[cfg(windows)]
 pub(crate) fn launch_registered_app(id: &str) -> Result<(), String> {
     Command::new("explorer.exe")
         .arg(format!("shell:AppsFolder\\{id}"))
@@ -470,17 +516,23 @@ pub fn set_launcher_preferences(app: AppHandle, preferences: Preferences) -> Res
     )
     .map_err(|e| e.to_string())?;
     CTRL_SPACE.store(preferences.ctrl_space, Ordering::Relaxed);
-    let thread_id = HOTKEY_THREAD.load(Ordering::Relaxed);
-    if thread_id != 0 {
-        unsafe {
-            let _ = PostThreadMessageW(thread_id, WM_APP, WPARAM(0), LPARAM(0));
+    #[cfg(windows)]
+    {
+        let thread_id = HOTKEY_THREAD.load(Ordering::Relaxed);
+        if thread_id != 0 {
+            unsafe {
+                let _ = PostThreadMessageW(thread_id, WM_APP, WPARAM(0), LPARAM(0));
+            }
         }
     }
+    #[cfg(target_os = "linux")]
+    install_shortcuts(&app);
     CAPTURE.store(preferences.clipboard, Ordering::Relaxed);
     let _ = app.emit("launcher://preferences", launcher_preferences(app.clone()));
     Ok(())
 }
 
+#[cfg(windows)]
 fn key(vk: VIRTUAL_KEY, up: bool) -> INPUT {
     INPUT {
         r#type: INPUT_KEYBOARD,
@@ -503,6 +555,7 @@ fn request_open(mode: &'static str) {
         let _ = tx.send(mode);
     }
 }
+#[cfg(windows)]
 fn configure_ctrl_space(app: &AppHandle, registered: &mut bool) {
     if *registered {
         unsafe {
@@ -526,6 +579,7 @@ fn configure_ctrl_space(app: &AppHandle, registered: &mut bool) {
     *app.state::<Launcher>().shortcut_error.lock().unwrap() = error;
     let _ = app.emit("launcher://preferences", launcher_preferences(app.clone()));
 }
+#[cfg(windows)]
 fn spawn_hotkey(app: AppHandle) {
     thread::spawn(move || unsafe {
         let mut msg = MSG::default();
@@ -588,12 +642,133 @@ fn spawn_hotkey(app: AppHandle) {
     });
 }
 
+#[cfg(target_os = "linux")]
+fn spawn_hotkey(app: AppHandle) {
+    // gsettings round-trips are slow; keep them off the main thread.
+    thread::spawn(move || install_shortcuts(&app));
+}
+
+/// Registers GNOME shortcuts that launch `wallp --launcher` and friends.
+#[cfg(target_os = "linux")]
+fn install_shortcuts(app: &AppHandle) {
+    let error = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| e.to_string())
+        .and_then(|dir| {
+            crate::linux::keybindings::install(&dir, CTRL_SPACE.load(Ordering::Relaxed))
+        })
+        .err()
+        .map(|error| format!("Couldn't register GNOME shortcuts: {error}"));
+    *app.state::<Launcher>().shortcut_error.lock().unwrap() = error;
+    let _ = app.emit("launcher://preferences", launcher_preferences(app.clone()));
+}
+
+/// Removes the GNOME shortcuts and gives Ctrl+Alt+D back to Show Desktop.
+#[cfg(target_os = "linux")]
+pub fn release_shortcuts(app: &AppHandle) {
+    if let Ok(dir) = app.path().app_local_data_dir() {
+        crate::linux::keybindings::remove(&dir);
+    }
+}
+
+/// Handles a GNOME shortcut forwarded from a second `wallp` process.
+#[cfg(target_os = "linux")]
+pub fn handle_shortcut_args(app: &AppHandle, args: &[String]) {
+    use crate::linux::keybindings::{DESKTOP, LAUNCHER, WORKSPACE};
+    let flag = args.iter().skip(1).find_map(|arg| {
+        [LAUNCHER, WORKSPACE, DESKTOP].into_iter().find(|f| f == arg)
+    });
+    match flag {
+        Some(LAUNCHER) if CTRL_SPACE.load(Ordering::Relaxed) && READY.load(Ordering::Relaxed) => {
+            request_open("apps")
+        }
+        Some(flag @ (WORKSPACE | DESKTOP)) => {
+            let workspace = flag == WORKSPACE;
+            let handle = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                if let Err(error) = crate::taskbar::show_wallp_desktop(handle, workspace) {
+                    let screen = if workspace { "workspace" } else { "desktop" };
+                    eprintln!("wallp: couldn't open {screen}: {error}");
+                }
+            });
+        }
+        _ => {}
+    }
+}
+
+/// Saves a clipboard capture and tells the command menu.
+fn remember(app: &AppHandle, content: Content) {
+    let state = app.state::<Launcher>();
+    let mut history = state.history.lock().unwrap();
+    let result = history
+        .as_mut()
+        .ok_or("History unavailable".to_string())
+        .and_then(|h| h.remember(content));
+    drop(history);
+    match result {
+        Ok(()) => {
+            let _ = app.emit("launcher://clipboard", ());
+        }
+        Err(error) => {
+            let _ = app.emit(
+                "launcher://error",
+                format!("Couldn't save clipboard history: {error}"),
+            );
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn spawn_clipboard(app: AppHandle) {
+    use crate::linux::clipboard::{Kind, Watcher, with};
+    thread::spawn(move || {
+        let watcher = match Watcher::new() {
+            Ok(watcher) => watcher,
+            Err(error) => {
+                let _ = app.emit("launcher://error", format!("Clipboard history is unavailable: {error}"));
+                return;
+            }
+        };
+        loop {
+            let kind = match watcher.next() {
+                Ok(kind) => kind,
+                Err(error) => {
+                    eprintln!("wallp: clipboard watcher stopped: {error}");
+                    return;
+                }
+            };
+            if !CAPTURE.load(Ordering::Relaxed) {
+                continue;
+            }
+            let content = match kind {
+                Some(Kind::Text) => with(|c| c.get_text()).ok().filter(|text| {
+                    !text.trim().is_empty() && text.encode_utf16().count() <= TEXT_LIMIT
+                }).map(Content::Text),
+                Some(Kind::Image) => with(|c| c.get_image()).ok().and_then(|image| {
+                    image::RgbaImage::from_raw(
+                        u32::try_from(image.width).ok()?,
+                        u32::try_from(image.height).ok()?,
+                        image.bytes.into_owned(),
+                    )
+                }).map(Content::Image),
+                None => None,
+            };
+            if let Some(content) = content {
+                remember(&app, content);
+            }
+        }
+    });
+}
+
+#[cfg(windows)]
 enum Capture {
     Text(String),
     Image,
 }
 
 // Clipboard handles remain owned by Windows. Always unlock and close before returning.
+#[cfg(windows)]
 unsafe fn clipboard_content() -> Result<Option<Capture>, String> {
     unsafe {
         OpenClipboard(None).map_err(|e| e.to_string())?;
@@ -648,6 +823,7 @@ unsafe fn clipboard_content() -> Result<Option<Capture>, String> {
         result
     }
 }
+#[cfg(windows)]
 fn spawn_clipboard(app: AppHandle) {
     thread::spawn(move || {
         let mut sequence = unsafe { GetClipboardSequenceNumber() };
@@ -688,24 +864,7 @@ fn spawn_clipboard(app: AppHandle) {
             if let Ok(content) = capture {
                 sequence = current;
                 if let Some(content) = content {
-                    let state = app.state::<Launcher>();
-                    let mut history = state.history.lock().unwrap();
-                    let result = history
-                        .as_mut()
-                        .ok_or("History unavailable".to_string())
-                        .and_then(|h| h.remember(content));
-                    drop(history);
-                    match result {
-                        Ok(()) => {
-                            let _ = app.emit("launcher://clipboard", ());
-                        }
-                        Err(error) => {
-                            let _ = app.emit(
-                                "launcher://error",
-                                format!("Couldn't save clipboard history: {error}"),
-                            );
-                        }
-                    }
+                    remember(&app, content);
                 }
             }
         }
@@ -716,6 +875,7 @@ fn spawn_clipboard(app: AppHandle) {
 mod tests {
     use super::*;
 
+    #[cfg(windows)]
     #[test]
     fn clipboard_image_preserves_orientation_colors_and_alpha() {
         let image = image::RgbaImage::from_raw(1, 2, vec![255, 0, 0, 128, 0, 0, 255, 255]).unwrap();
@@ -731,6 +891,7 @@ mod tests {
         assert_eq!(&dib[124..], &[255, 0, 0, 255, 0, 0, 255, 128]);
     }
 
+    #[cfg(windows)]
     #[test]
     fn windows_app_registration_provides_a_png_icon() {
         let output = Command::new("powershell.exe")
@@ -838,6 +999,7 @@ pub async fn clear_clipboard_history(app: AppHandle) -> Result<(), String> {
     .await
     .map_err(|e| e.to_string())?
 }
+#[cfg(windows)]
 unsafe fn write_clipboard_formats(owner: HWND, formats: &[(u32, Vec<u8>)]) -> Result<(), String> {
     unsafe {
         for attempt in 0..6 {
@@ -869,6 +1031,7 @@ unsafe fn write_clipboard_formats(owner: HWND, formats: &[(u32, Vec<u8>)]) -> Re
         result
     }
 }
+#[cfg(windows)]
 fn clipboard_image_formats(image: image::RgbaImage) -> Result<Vec<(u32, Vec<u8>)>, String> {
     use windows::Win32::Graphics::Gdi::{BI_BITFIELDS, BITMAPV5HEADER, LCS_GM_IMAGES};
     let width = i32::try_from(image.width()).map_err(|e| e.to_string())?;
@@ -917,6 +1080,36 @@ fn clipboard_image_formats(image: image::RgbaImage) -> Result<Vec<(u32, Vec<u8>)
     }
     Ok(vec![(png_format, png.into_inner()), (17, dib)]) // CF_DIBV5
 }
+/// Wayland lets no app type into another, so the entry is only copied. Hiding
+/// the menu returns focus to the previous app, ready for Ctrl+V.
+#[cfg(target_os = "linux")]
+#[tauri::command]
+pub async fn paste_clipboard(app: AppHandle, id: i64) -> Result<(), String> {
+    let handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let content = handle
+            .state::<Launcher>()
+            .history
+            .lock()
+            .unwrap()
+            .as_ref()
+            .ok_or("History unavailable")?
+            .get(id)?;
+        crate::linux::clipboard::with(|clipboard| match content {
+            Content::Text(text) => clipboard.set_text(text),
+            Content::Image(image) => clipboard.set_image(arboard::ImageData {
+                width: image.width() as usize,
+                height: image.height() as usize,
+                bytes: image.into_raw().into(),
+            }),
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    close_launcher(app)
+}
+
+#[cfg(windows)]
 #[tauri::command]
 pub async fn paste_clipboard(app: AppHandle, id: i64) -> Result<(), String> {
     let handle = app.clone();

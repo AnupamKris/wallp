@@ -3,6 +3,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { ArrowLeftIcon, ArrowRightIcon, ClipboardTextIcon, MagnifyingGlassIcon, ArrowClockwiseIcon, TrashIcon, ImageIcon, CommandIcon, SparkleIcon, PushPinIcon, PowerIcon, MoonIcon } from "@phosphor-icons/react";
 import { useHomeShortcuts } from "./home-shortcuts";
+import { isLinux } from "./platform";
 import { engines, isClipboardCommand, parseBang, searchApps, searchPowerCommands, type InstalledApp, type PowerAction } from "./launcher-search";
 import "./Launcher.css";
 import { AiMarkdown } from "./AiMarkdown";
@@ -307,7 +308,7 @@ export function Launcher() {
       {!!aiMessages.length && !aiLoading && <span className="command-ai-announcement" role="status">Answer ready. Type a reply to continue.</span>}
       </>}
     </section>}
-    <footer className="command-footer"><span><CommandIcon />wallp <i />{mode === "clipboard" ? `${clipTotal.toLocaleString()} saved · Text & images` : `${apps.length} apps cached`}</span><span><kbd>↑</kbd><kbd>↓</kbd> navigate <kbd>↵</kbd> {mode === "clipboard" ? "paste" : aiMode ? "ask" : "open"}</span></footer>
+    <footer className="command-footer"><span><CommandIcon />wallp <i />{mode === "clipboard" ? `${clipTotal.toLocaleString()} saved · Text & images` : `${apps.length} apps cached`}</span><span><kbd>↑</kbd><kbd>↓</kbd> navigate <kbd>↵</kbd> {mode === "clipboard" ? (isLinux ? "copy" : "paste") : aiMode ? "ask" : "open"}</span></footer>
     {mode === "apps" && !query && <div className="command-bangs">{engines.map(engine => <button key={engine.key} onClick={() => { changeQuery(`${engine.key} `); input.current?.focus(); }}><kbd>{engine.key}</kbd>{engine.name}</button>)}</div>}
   </main>;
 }

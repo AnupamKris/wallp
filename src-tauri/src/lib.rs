@@ -1,17 +1,22 @@
-#[cfg(not(windows))]
-compile_error!("wallp embeds itself in the Windows desktop and only builds for Windows.");
+#[cfg(not(any(windows, target_os = "linux")))]
+compile_error!("wallp embeds itself in the Windows or GNOME desktop and only builds for those.");
 
 mod agnes;
 mod ai_history;
 mod clipboard_history;
+#[cfg_attr(target_os = "linux", path = "linux/desktop.rs")]
 mod desktop;
 mod email_digest;
 mod gmail;
 mod home_shortcuts;
 mod launcher;
+#[cfg(target_os = "linux")]
+mod linux;
 mod mail_cache;
 mod power;
+#[cfg_attr(target_os = "linux", path = "linux/taskbar.rs")]
 mod taskbar;
+#[cfg_attr(target_os = "linux", path = "linux/tray_apps.rs")]
 mod tray_apps;
 pub use taskbar::recovery_entry;
 
@@ -56,7 +61,10 @@ fn attach_desktop(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
             .build()?,
     };
 
+    #[cfg(windows)]
     let attachment = desktop::attach(window.hwnd()?)?;
+    #[cfg(target_os = "linux")]
+    let attachment = desktop::attach(&window)?;
     let state = app.state::<Desktop>();
     attachment.set_icons_visible(state.icons_visible.load(Ordering::Relaxed));
     *state.attachment.lock().unwrap() = Some(attachment);
@@ -127,6 +135,7 @@ fn desktop_paused() -> bool {
 
 /// Built-in desktop shortcuts use fixed install paths. Custom homescreen pins
 /// launch separately using registered app IDs from the launcher index.
+#[cfg(windows)]
 #[tauri::command]
 fn launch_shortcut(app: AppHandle, target: &str) -> Result<(), String> {
     use std::{path::PathBuf, process::Command};
@@ -187,11 +196,53 @@ fn launch_shortcut(app: AppHandle, target: &str) -> Result<(), String> {
         .map_err(|err| format!("Couldn't open {target}: {err}"))
 }
 
+/// Built-in desktop shortcuts use the apps' desktop entries, native or Flatpak.
+/// Custom homescreen pins launch separately from the launcher index.
+#[cfg(target_os = "linux")]
+#[tauri::command]
+fn launch_shortcut(app: AppHandle, target: &str) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+
+    let open_path = |path: std::path::PathBuf| {
+        app.opener()
+            .open_path(path.to_string_lossy(), None::<&str>)
+            .map_err(|err| format!("Couldn't open {target}: {err}"))
+    };
+    let ids: &[&str] = match target {
+        // Nautilus' Other Locations lists drives, like This PC.
+        "pc" => {
+            return std::process::Command::new("nautilus")
+                .arg("other-locations:///")
+                .spawn()
+                .map(|_| ())
+                .or_else(|_| open_path("/".into()));
+        }
+        "downloads" => return open_path(app.path().download_dir().map_err(|err| err.to_string())?),
+        "edge" => &[
+            "microsoft-edge.desktop",
+            "microsoft-edge-beta.desktop",
+            "microsoft-edge-dev.desktop",
+            "com.microsoft.Edge.desktop",
+        ],
+        "steam" => &["steam.desktop", "com.valvesoftware.Steam.desktop"],
+        "riot" => return Err("Riot Games isn't available on Linux.".into()),
+        "t3" => &["com.t3tools.T3Code.desktop", "t3code.desktop"],
+        _ => return Err("Unknown desktop shortcut".into()),
+    };
+    let id = ids
+        .iter()
+        .find(|id| linux::apps::exists(id))
+        .ok_or_else(|| format!("Couldn't find {target}. Check that it is installed."))?;
+    linux::apps::launch(id)
+}
+
 /// Puts the desktop back the way Explorer left it.
 fn restore_desktop(app: &AppHandle) {
     let state = app.state::<Desktop>();
     state.quitting.store(true, Ordering::Relaxed);
     taskbar::restore(app);
+    #[cfg(target_os = "linux")]
+    launcher::release_shortcuts(app);
     if let Some(attachment) = state.attachment.lock().unwrap().take() {
         attachment.set_icons_visible(true);
     }
@@ -210,6 +261,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     )?;
     let reload = MenuItem::with_id(app, "reload", "Reload", true, None::<&str>)?;
     let commands = MenuItem::with_id(app, "commands", "Open command menu", true, None::<&str>)?;
+    #[cfg(windows)]
     let restore_taskbar = MenuItem::with_id(
         app,
         "restore-taskbar",
@@ -218,17 +270,15 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         None::<&str>,
     )?;
     let quit = MenuItem::with_id(app, "quit", "Quit wallp", true, None::<&str>)?;
-    let menu = Menu::with_items(
-        app,
-        &[
-            &show_icons,
-            &commands,
-            &restore_taskbar,
-            &reload,
-            &PredefinedMenuItem::separator(app)?,
-            &quit,
-        ],
-    )?;
+    let separator = PredefinedMenuItem::separator(app)?;
+    // GNOME keeps its own panel, so there is no taskbar to restore there.
+    #[cfg(windows)]
+    let items: [&dyn tauri::menu::IsMenuItem<_>; 6] =
+        [&show_icons, &commands, &restore_taskbar, &reload, &separator, &quit];
+    #[cfg(target_os = "linux")]
+    let items: [&dyn tauri::menu::IsMenuItem<_>; 5] =
+        [&show_icons, &commands, &reload, &separator, &quit];
+    let menu = Menu::with_items(app, &items)?;
 
     TrayIconBuilder::with_id("wallp")
         .icon(
@@ -263,7 +313,11 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 pub fn run() {
     tauri::Builder::default()
         // A second copy would fight the first over the desktop.
-        .plugin(tauri_plugin_single_instance::init(|_, _, _| {}))
+        // GNOME shortcuts reach the running copy as arguments of a second one.
+        .plugin(tauri_plugin_single_instance::init(|_app, _args, _| {
+            #[cfg(target_os = "linux")]
+            launcher::handle_shortcut_args(_app, &_args);
+        }))
         .plugin(tauri_plugin_opener::init())
         .manage(taskbar::Taskbar::default())
         .manage(launcher::Launcher::default())
@@ -324,6 +378,8 @@ pub fn run() {
                 eprintln!("wallp: couldn't initialize email digest: {error}");
             }
             build_tray(&handle)?;
+            #[cfg(target_os = "linux")]
+            linux::exit_on_signals(&handle);
             launcher::setup(&handle)?;
             if let Err(err) = attach_desktop(&handle) {
                 // Explorer may still be starting (e.g. launched at login).

@@ -4,6 +4,7 @@ import { Switch } from "@/components/ui/switch";
 import { Slider } from "@/components/ui/slider";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { TaskbarControl } from "./Taskbar";
+import { isLinux } from "./platform";
 import { LauncherSettings } from "./Launcher";
 import { startClockSweep } from "./clock-motion";
 import { ThemeSettings, type Theme } from "./Theme";
@@ -230,7 +231,7 @@ export function ClockSettings({ settings, onChange, theme, onThemeChange, onClos
         ["seconds", "Seconds", ""],
         ["labels", "City labels", ""],
       ] as const).map(([key, label, hint]) => <div key={key} className="setting-row toggle-row"><label htmlFor={`setting-${key}`}>{label}{hint && <small>{hint}</small>}</label><Switch id={`setting-${key}`} checked={settings[key]} onCheckedChange={checked => update({ [key]: checked })} /></div>)}
-      <div className="desktop-settings"><h3>Desktop</h3><TaskbarControl /></div>
+      {!isLinux && <div className="desktop-settings"><h3>Desktop</h3><TaskbarControl /></div>}
       <LauncherSettings />
       </section>
       </div>

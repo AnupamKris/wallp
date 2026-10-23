@@ -1,6 +1,9 @@
 use serde::Deserialize;
-use std::{os::windows::process::CommandExt, process::Command};
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+use std::process::Command;
 use tauri::AppHandle;
+#[cfg(windows)]
 use windows::Win32::{
     Foundation::{CloseHandle, ERROR_NOT_ALL_ASSIGNED, GetLastError, HANDLE, LUID},
     Security::{
@@ -21,6 +24,7 @@ pub enum PowerAction {
     Sleep,
 }
 
+#[cfg(windows)]
 #[tauri::command]
 pub async fn launcher_power(app: AppHandle, action: PowerAction) -> Result<(), String> {
     // Sleep can block until resume, so keep it off the UI thread.
@@ -61,6 +65,36 @@ pub async fn launcher_power(app: AppHandle, action: PowerAction) -> Result<(), S
     .map_err(|err| err.to_string())?
 }
 
+/// logind lets the active local session power off, restart or suspend
+/// without a password, matching GNOME's own power menu.
+#[cfg(target_os = "linux")]
+#[tauri::command]
+pub async fn launcher_power(app: AppHandle, action: PowerAction) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let verb = match action {
+            PowerAction::PowerOff => "poweroff",
+            PowerAction::Restart => "reboot",
+            PowerAction::Sleep => "suspend",
+        };
+        // Close first: suspend returns only after the PC wakes.
+        crate::launcher::close_launcher(app)?;
+        let output = Command::new("systemctl")
+            .arg(verb)
+            .output()
+            .map_err(|err| err.to_string())?;
+        if !output.status.success() {
+            return Err(format!(
+                "Linux could not run the power command: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}
+
+#[cfg(windows)]
 fn sleep_pc() -> Result<(), String> {
     unsafe {
         let mut token = HANDLE::default();

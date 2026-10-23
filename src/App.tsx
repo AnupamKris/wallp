@@ -6,6 +6,7 @@ import { ClockSettings, WorldClocks, loadSettings } from "./Clocks";
 import { Button } from "@/components/ui/button";
 import { ArrowDownIcon, PlusIcon, XIcon } from "@phosphor-icons/react";
 import { useHomeShortcuts } from "./home-shortcuts";
+import { isLinux } from "./platform";
 import { Workspace } from "./Workspace";
 import { TrayApps } from "./TrayApps";
 import { startClockTicker } from "./clock-motion";
@@ -13,11 +14,11 @@ import { useTheme } from "./Theme";
 import { EmailDigest } from "./EmailDigest";
 
 type AppId = "pc" | "downloads" | "edge" | "steam" | "riot" | "t3";
-const shortcuts: { id: AppId; label: string }[] = [
+const shortcuts = ([
   { id: "edge", label: "Microsoft Edge" },
   { id: "steam", label: "Steam" },
   { id: "riot", label: "Riot Games" },
-];
+] satisfies { id: AppId; label: string }[]).filter(({ id }) => !(isLinux && id === "riot"));
 
 function Icon({ name }: { name: AppId | "close" | "alert" | "settings" }) {
   return (
