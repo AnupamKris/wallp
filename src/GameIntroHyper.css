@@ -1,0 +1,66 @@
+/* Web Animations (GameIntroHyper.tsx) and the CSS loops here touch only transform and opacity, so the compositor runs them off the main thread. */
+.hyper-intro { position: fixed; inset: 0; z-index: 70; display: grid; place-items: center; overflow: hidden; pointer-events: none; contain: strict; }
+.hyper-hold { z-index: 60; }
+.hyper-intro > * { grid-area: 1 / 1; }
+
+/* Diamond iris: four panels meet at the center; moving them outward opens a square hole rotated 45deg. */
+.hyper-iris { position: absolute; left: 50%; top: 50%; width: 0; height: 0; transform: rotate(45deg); }
+.hyper-iris-panel, .hyper-iris-line { position: absolute; will-change: transform; }
+.hyper-iris-panel.hyper-iris-n { left: -65vmax; bottom: 0; width: 130vmax; height: 65vmax; }
+.hyper-iris-panel.hyper-iris-s { left: -65vmax; top: 0; width: 130vmax; height: 65vmax; }
+.hyper-iris-panel.hyper-iris-w { top: -65vmax; right: 0; width: 65vmax; height: 130vmax; }
+.hyper-iris-panel.hyper-iris-e { top: -65vmax; left: 0; width: 65vmax; height: 130vmax; }
+.hyper-iris-line { opacity: 0; }
+.hyper-iris-line.hyper-iris-n, .hyper-iris-line.hyper-iris-s { left: -65vmax; top: -1px; width: 130vmax; height: 2px; }
+.hyper-iris-line.hyper-iris-w, .hyper-iris-line.hyper-iris-e { top: -65vmax; left: -1px; width: 2px; height: 130vmax; }
+
+/* Hyperspace tunnel: diamonds rush toward the camera on a loop. */
+.hyper-tunnel { position: relative; width: 0; height: 0; opacity: 0; will-change: transform, opacity; }
+.hyper-tunnel > span { position: absolute; left: -12vmin; top: -12vmin; width: 24vmin; aspect-ratio: 1; border-width: 1px; border-style: solid; opacity: 0; will-change: transform, opacity; animation: hyper-tunnel 1.5s cubic-bezier(.55, 0, 1, .45) infinite; }
+@keyframes hyper-tunnel { from { transform: rotate(45deg) scale(.1); opacity: 0; } 30% { opacity: .7; } to { transform: rotate(45deg) scale(5); opacity: 0; } }
+
+/* Warp streaks: each axis sets the angle, the mover loops outward, and the charge and jump stretch the streak itself. */
+.hyper-streaks { position: relative; width: 0; height: 0; }
+.hyper-streak-axis { position: absolute; left: 0; top: 0; width: 0; height: 0; }
+.hyper-streak-mover { position: absolute; left: 0; top: 0; will-change: transform, opacity; animation: hyper-flow 1s linear infinite; }
+.hyper-streak { display: block; width: 16vmax; height: 1px; margin-top: -.5px; transform-origin: 0 50%; opacity: 0; background: linear-gradient(90deg, transparent, var(--primary)); will-change: transform, opacity; }
+.hyper-streak-bold { height: 3px; margin-top: -1.5px; }
+@keyframes hyper-flow { from { transform: translateX(6vmin); opacity: 0; } 25% { opacity: 1; } to { transform: translateX(70vmax); opacity: 1; } }
+
+.hyper-frame { position: relative; width: min(560px, 80vmin); aspect-ratio: 1; border-width: 2px; border-style: solid; opacity: 0; will-change: transform, opacity; }
+.hyper-frame-inner { width: min(500px, 72vmin); border-width: 1px; }
+
+.hyper-core { position: relative; opacity: 0; will-change: transform, opacity; }
+.hyper-shake { display: grid; justify-items: center; gap: 10px; will-change: transform; }
+.hyper-dial { position: relative; display: grid; place-items: center; width: 168px; aspect-ratio: 1; margin-bottom: 10px; }
+.hyper-dial > * { grid-area: 1 / 1; }
+.hyper-dial-ring { position: relative; width: 100%; height: 100%; }
+.hyper-seg-axis { position: absolute; left: 50%; top: 50%; width: 0; height: 0; }
+.hyper-seg { position: absolute; left: -2px; top: -84px; width: 4px; height: 14px; }
+.hyper-icon { display: grid; place-items: center; }
+.hyper-kicker { font-size: 12px; letter-spacing: .4em; text-transform: uppercase; padding-left: .4em; text-align: center; }
+.hyper-word { position: relative; display: flex; justify-content: center; font-size: clamp(32px, 4.4vw, 60px); font-weight: 600; line-height: 1.05; white-space: nowrap; }
+/* Fixed cells keep the wordmark from reflowing while its glyphs scramble. */
+.hyper-cell { display: inline-block; width: .82em; text-align: center; }
+.hyper-cell-space { width: .4em; }
+.hyper-ghost { position: absolute; inset: 0; display: flex; justify-content: center; opacity: 0; will-change: transform, opacity; }
+.hyper-count { font-size: 13px; letter-spacing: .3em; padding-left: .3em; }
+.hyper-meter { width: 260px; height: 3px; overflow: hidden; }
+.hyper-meter-fill { height: 100%; transform-origin: left; transform: scaleX(0); }
+
+.hyper-burst { position: relative; width: 20vmin; aspect-ratio: 1; opacity: 0; will-change: transform, opacity; }
+.hyper-shock { position: relative; width: 20vmin; aspect-ratio: 1; border-width: 2px; border-style: solid; opacity: 0; will-change: transform, opacity; }
+.hyper-flash { position: absolute; inset: 0; opacity: 0; will-change: opacity; }
+
+/* Game Mode zooms in through the opening iris. --intro matches the jump: later when the charge has to play first. */
+.game-home[data-intro="hyper"] { animation: hyper-home-in 900ms cubic-bezier(.16, 1, .3, 1) var(--intro) both; }
+/* Specific enough to beat the generic .game-home[data-intro] delay in GameMode.css, which loads later. */
+.game-home[data-intro="hyper"]:not([data-held]) { --intro: 820ms; }
+.game-home[data-intro="hyper"][data-held] { --intro: 320ms; }
+.game-home[data-intro="hyper"] .game-spotlight { animation-name: hyper-spotlight-in; }
+.game-home[data-intro="hyper"] .game-backdrop { animation-duration: 1100ms; }
+@keyframes hyper-home-in { from { opacity: 0; transform: scale(1.25); } 15% { opacity: 1; } }
+@keyframes hyper-spotlight-in { from { opacity: 0; transform: translateX(-56px) skewX(-6deg); } }
+
+@media (max-height: 500px) { .hyper-dial { width: 120px; margin-bottom: 0; } .hyper-seg { top: -60px; height: 10px; } .hyper-icon svg { width: 32px; height: 32px; } .hyper-shake { gap: 6px; } }
+@media (prefers-reduced-motion: reduce) { .game-home[data-intro="hyper"], .game-home[data-intro="hyper"] .game-spotlight { animation: none; } }

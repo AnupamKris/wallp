@@ -1,0 +1,34 @@
+.desk-buddy { width: 100%; height: 100%; max-width: 280px; max-height: 210px; overflow: visible; color: var(--card-foreground); }
+.desk-buddy .fill-card { fill: var(--card); }
+.desk-buddy .fill-muted { fill: var(--muted); }
+.buddy-ears { stroke: var(--muted-foreground); stroke-width: 1.5; }
+.buddy-keys { stroke: var(--muted-foreground); stroke-width: 1.2; }
+.buddy-cable { stroke: var(--muted-foreground); stroke-width: 1.5; fill: none; }
+.buddy-whiskers { stroke: var(--muted-foreground); stroke-width: 1.2; }
+.buddy-blush { stroke: currentColor; stroke-width: 1.2; opacity: 0.45; }
+.buddy-head { transform-origin: 120px 110px; animation: buddy-breathe 4s ease-in-out infinite; }
+.buddy-eyes { transform-origin: 120px 74px; animation: buddy-blink 6s infinite; }
+.buddy-left-paw, .buddy-right-paw, .buddy-mouse { transition: transform 65ms ease-out; }
+.buddy-impact { opacity: 0; stroke-width: 2; }
+.desk-buddy[data-moving="true"] .buddy-mouse,
+.desk-buddy[data-moving="true"] .buddy-right-paw { transform: translate(var(--buddy-x, 0px), var(--buddy-y, 0px)); }
+.desk-buddy[data-typing="true"] .buddy-left-paw { animation: buddy-slap 160ms ease-in-out infinite alternate; }
+.desk-buddy[data-typing="true"] .buddy-right-paw { animation: buddy-right-slap 160ms ease-in-out infinite alternate-reverse; }
+.desk-buddy[data-typing="true"][data-paw="1"] .buddy-left-paw { animation-direction: alternate-reverse; }
+.desk-buddy[data-typing="true"][data-paw="1"] .buddy-right-paw { animation-direction: alternate; }
+.desk-buddy[data-typing="true"] .buddy-impact { opacity: 1; }
+.desk-buddy[data-variant="simple"][data-typing="true"] .buddy-left-paw { animation-name: buddy-pat; }
+.desk-buddy[data-variant="simple"][data-typing="true"] .buddy-right-paw { animation-name: buddy-pat-reach; }
+@keyframes buddy-slap { from { transform: translate(4px, -12px) rotate(2deg); } to { transform: translate(0, 7px); } }
+@keyframes buddy-right-slap { from { transform: translate(-40px, -12px); } to { transform: translate(-40px, 8px); } }
+@keyframes buddy-pat { from { transform: translateY(-9px); } to { transform: translateY(2px); } }
+@keyframes buddy-pat-reach { from { transform: translate(-30px, -10px); } to { transform: translate(-30px, 0); } }
+@keyframes buddy-breathe { 50% { transform: translateY(2px) rotate(1deg); } }
+@keyframes buddy-blink { 0%, 43%, 47%, 100% { transform: scaleY(1); } 45% { transform: scaleY(.1); } }
+@media (prefers-reduced-motion: reduce) {
+  .desk-buddy * { animation: none !important; transition: none !important; }
+  .desk-buddy[data-typing="true"] .buddy-left-paw { transform: translateY(5px); }
+  .desk-buddy[data-typing="true"] .buddy-right-paw { transform: translate(-40px, 5px); }
+  .desk-buddy[data-variant="simple"][data-typing="true"] .buddy-left-paw { transform: translateY(2px); }
+  .desk-buddy[data-variant="simple"][data-typing="true"] .buddy-right-paw { transform: translate(-30px, 0); }
+}

@@ -5,11 +5,25 @@ export const powerCommands = [
   { action: "sleep", title: "Sleep", detail: "Put the PC to sleep", aliases: ["sleep"] },
 ] as const;
 export type PowerAction = typeof powerCommands[number]["action"];
-export function searchPowerCommands(query: string) {
+// The tray menu's actions, reachable when wallp has hidden the Windows taskbar.
+export const wallpCommands = [
+  { action: "restore_taskbar", title: "Restore Windows taskbar", detail: "Bring back the Windows taskbar and tray", aliases: ["restore windows taskbar", "restore taskbar", "show taskbar", "windows taskbar", "taskbar", "tray"] },
+  { action: "reload", title: "Reload wallp", detail: "Reload the desktop", aliases: ["reload wallp", "reload"] },
+  { action: "quit", title: "Quit wallp", detail: "Close wallp and restore the Windows desktop", aliases: ["quit wallp", "quit", "exit wallp", "close wallp"] },
+] as const;
+export type WallpAction = typeof wallpCommands[number]["action"];
+function matchCommands<T extends { aliases: readonly string[] }>(commands: readonly T[], query: string) {
   const phrase = query.trim().toLowerCase().replace(/\s+/g, " ");
-  return phrase ? powerCommands.filter(command => command.aliases.some(alias => alias.startsWith(phrase))) : [];
+  return phrase ? commands.filter(command => command.aliases.some(alias => alias.startsWith(phrase))) : [];
+}
+export function searchPowerCommands(query: string) {
+  return matchCommands(powerCommands, query);
+}
+export function searchWallpCommands(query: string) {
+  return matchCommands(wallpCommands, query);
 }
 export const engines = [
+  { key: "f", name: "Files" },
   { key: "ai", name: "Ask AI" },
   { key: "g", name: "Google" },
   { key: "y", name: "YouTube" },

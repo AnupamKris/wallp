@@ -1,0 +1,24 @@
+/* Mouse-mode toast: the native window hides after 3 s, so the progress line matches that timeout. */
+.controller-toast { animation: controller-toast-in 260ms cubic-bezier(.22, 1, .36, 1) both; }
+.controller-toast-badge { animation: controller-badge-in 420ms cubic-bezier(.34, 1.56, .64, 1) 60ms both; }
+.controller-toast[data-active] .controller-toast-badge::after { content: ""; position: absolute; inset: -1px; border: 1px solid var(--primary); animation: controller-badge-ping 900ms cubic-bezier(.22, 1, .36, 1) 240ms both; }
+.controller-toast-hint { animation: controller-hint-in 320ms cubic-bezier(.22, 1, .36, 1) both; }
+.controller-toast-hint:nth-child(2) { animation-delay: 50ms; }
+.controller-toast-hint:nth-child(3) { animation-delay: 100ms; }
+.controller-toast-hint:nth-child(4) { animation-delay: 150ms; }
+.controller-toast-progress { animation: controller-toast-expire 3s linear forwards; }
+.controller-panel { animation: controller-toast-in 220ms cubic-bezier(.22, 1, .36, 1) both; }
+/* Controller selection: the chosen key lifts slightly so it reads at a glance from the couch. */
+.controller-control { transition: transform 90ms ease-out, background-color 90ms ease-out, color 90ms ease-out; }
+.controller-control[data-selected] { transform: scale(1.06); box-shadow: 0 0 0 2px var(--background), 0 0 0 3px var(--ring); }
+/* A controller shortcut presses a key without selecting it; flash it so the press is visible. */
+.controller-control[data-flash="true"] { animation: controller-key-flash 260ms ease-out; }
+@keyframes controller-key-flash { from { background-color: var(--primary); color: var(--primary-foreground); } }
+/* The native confirmation expires after 30 s; the line runs out with it. */
+.controller-confirm-progress { animation: controller-toast-expire 30s linear forwards; }
+@keyframes controller-toast-in { from { opacity: 0; transform: translateY(12px) scale(.98); } }
+@keyframes controller-badge-in { from { opacity: 0; transform: scale(.6) rotate(-8deg); } }
+@keyframes controller-badge-ping { from { opacity: .9; transform: scale(1); } to { opacity: 0; transform: scale(1.6); } }
+@keyframes controller-hint-in { from { opacity: 0; transform: translateY(6px); } }
+@keyframes controller-toast-expire { to { transform: scaleX(0); } }
+@media (prefers-reduced-motion: reduce) { .controller-toast, .controller-toast-badge, .controller-toast-badge::after, .controller-toast-hint, .controller-toast-progress, .controller-panel, .controller-control, .controller-confirm-progress, .controller-control[data-flash] { animation: none !important; transition: none !important; } }

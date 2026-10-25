@@ -21,8 +21,8 @@ use windows::{
         Graphics::Gdi::MapWindowPoints,
         UI::{
             Shell::{
-                QUNS_BUSY, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN,
-                SHQueryUserNotificationState,
+                QUERY_USER_NOTIFICATION_STATE, QUNS_BUSY, QUNS_PRESENTATION_MODE,
+                QUNS_RUNNING_D3D_FULL_SCREEN, SHQueryUserNotificationState,
             },
             WindowsAndMessaging::*,
         },
@@ -192,10 +192,63 @@ impl Attachment {
 /// True while a fullscreen game, video or presentation is in front, so the
 /// desktop can't be seen and animations should pause.
 pub fn fullscreen_app_running() -> bool {
+    let notification_state = unsafe { SHQueryUserNotificationState() }.ok();
+    let desktop_foreground = unsafe {
+        let foreground = GetForegroundWindow();
+        let mut pid = 0;
+        GetWindowThreadProcessId(foreground, Some(&mut pid));
+        // Our desktop webview fills the screen, and Explorer's desktop hosts
+        // do too. Neither should prevent the dock from revealing at the edge.
+        let root = GetAncestor(foreground, GA_ROOT);
+        let mut class = [0u16; 64];
+        let len = GetClassNameW(root, &mut class);
+        let class = String::from_utf16_lossy(&class[..len as usize]);
+        pid == std::process::id() || matches!(class.as_str(), "Progman" | "WorkerW")
+    };
+    notification_blocks_desktop(notification_state, desktop_foreground)
+}
+
+fn notification_blocks_desktop(
+    state: Option<QUERY_USER_NOTIFICATION_STATE>,
+    desktop_foreground: bool,
+) -> bool {
+    // Presentation mode and exclusive Direct3D remain authoritative. BUSY is
+    // broader: it can also describe our screen-filling desktop window.
     matches!(
-        unsafe { SHQueryUserNotificationState() },
-        Ok(QUNS_BUSY | QUNS_RUNNING_D3D_FULL_SCREEN | QUNS_PRESENTATION_MODE)
-    )
+        state,
+        Some(QUNS_RUNNING_D3D_FULL_SCREEN | QUNS_PRESENTATION_MODE)
+    ) || (state == Some(QUNS_BUSY) && !desktop_foreground)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows::Win32::UI::Shell::QUNS_ACCEPTS_NOTIFICATIONS;
+
+    #[test]
+    fn busy_desktop_does_not_suppress_dock() {
+        assert!(!notification_blocks_desktop(Some(QUNS_BUSY), true));
+        assert!(notification_blocks_desktop(Some(QUNS_BUSY), false));
+    }
+
+    #[test]
+    fn explicit_fullscreen_and_presentation_still_suppress_dock() {
+        for desktop in [false, true] {
+            assert!(notification_blocks_desktop(
+                Some(QUNS_RUNNING_D3D_FULL_SCREEN),
+                desktop
+            ));
+            assert!(notification_blocks_desktop(
+                Some(QUNS_PRESENTATION_MODE),
+                desktop
+            ));
+            assert!(!notification_blocks_desktop(
+                Some(QUNS_ACCEPTS_NOTIFICATIONS),
+                desktop
+            ));
+            assert!(!notification_blocks_desktop(None, desktop));
+        }
+    }
 }
 
 /// Re-applies the current wallpaper. Run on exit so the last frame of our

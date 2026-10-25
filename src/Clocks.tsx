@@ -7,12 +7,10 @@ import { TaskbarControl } from "./Taskbar";
 import { LauncherSettings } from "./Launcher";
 import { startClockSweep } from "./clock-motion";
 import { ThemeSettings, type Theme } from "./Theme";
+import { QuickSettingsOptions } from "./QuickSettings";
+import { GameModeOptions } from "./GameMode";
+import { cityName, cityOptions, clockZones, defaultCities, loadCities } from "./clock-zones";
 
-export const zones = [
-  { label: "Shanghai", zone: "Asia/Shanghai", color: "#82cbd1" },
-  { label: "Melbourne", zone: "Australia/Melbourne", color: "#e5ad78" },
-  { label: "India", zone: "Asia/Kolkata", color: "#b3a0df" },
-] as const;
 export const styles = [
   { id: "dial", label: "Index", description: "Fine minute markers" },
   { id: "bauhaus", label: "Baton", description: "Bold geometric hands" },
@@ -43,8 +41,8 @@ const sizePresets = [
   { label: "Huge", size: 1000 },
   { label: "Absurd", size: 1800 },
 ];
-export type Settings = { style: ClockStyle; layout: "row" | "stack"; size: number; stackedAnalogue: boolean; seconds: boolean; labels: boolean };
-export const defaults: Settings = { style: "dial", layout: "row", size: 240, stackedAnalogue: true, seconds: true, labels: true };
+export type Settings = { style: ClockStyle; layout: "row" | "stack"; size: number; stackedAnalogue: boolean; seconds: boolean; labels: boolean; cities: string[] };
+export const defaults: Settings = { style: "dial", layout: "row", size: 240, stackedAnalogue: true, seconds: true, labels: true, cities: [...defaultCities] };
 export function loadSettings(): Settings {
   try {
     const value = JSON.parse(localStorage.getItem("wallp.clocks") || "null");
@@ -56,6 +54,7 @@ export function loadSettings(): Settings {
       stackedAnalogue: typeof value.stackedAnalogue === "boolean" ? value.stackedAnalogue : defaults.stackedAnalogue,
       seconds: typeof value.seconds === "boolean" ? value.seconds : defaults.seconds,
       labels: typeof value.labels === "boolean" ? value.labels : defaults.labels,
+      cities: loadCities(value.cities),
     };
   } catch { return defaults; }
 }
@@ -114,7 +113,7 @@ function DialMarks({ style }: { style: ClockStyle }) {
     })}
   </>;
 }
-export function ClockFace({ now, zone, style, seconds, stacked = false, animate = false }: { now: Date; zone: string; style: ClockStyle; seconds: boolean; stacked?: boolean; animate?: boolean }) {
+export function ClockFace({ now, zone, style, seconds, stacked = false, animate = false, zones = clockZones(defaultCities), dialLabels = false }: { now: Date; zone: string; style: ClockStyle; seconds: boolean; stacked?: boolean; animate?: boolean; zones?: ReturnType<typeof clockZones>; dialLabels?: boolean }) {
   const face = useRef<SVGSVGElement>(null);
   useEffect(() => {
     if (!animate || !face.current || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
@@ -134,12 +133,13 @@ export function ClockFace({ now, zone, style, seconds, stacked = false, animate 
   if (style === "blocks") return <div className="blocks-face">{[[time.hour, "HRS"], [time.minute, "MIN"], ...(seconds ? [[time.second, "SEC"]] : [])].map(([value, label]) => <div key={label}><span>{value}</span><small>{label}</small></div>)}</div>;
   return <svg ref={face} viewBox="0 0 320 320" aria-hidden="true" className={`analog-face face-${style}`}>
     <DialMarks style={style} />
+    {dialLabels && <g className="dial-city-labels">{(stacked ? zones : zones.filter(city => city.zone === zone).slice(0, 1)).map(({ label, color }, index) => <text key={index} x="160" y={stacked ? 216 + index * 20 : 224} textAnchor="middle" className="dial-city-label" style={{ fontSize: Math.min(stacked ? 11 : 13, 168 / (label.length * .7 + 1)), ...(stacked ? { fill: color } : {}) }}>{label}</text>)}</g>}
     {stacked ? zones.map(({ zone: handZone, color }, index) => {
       const local = zonedTime(now, handZone);
       const minute = Number(local.minute) + (Number(local.second) + now.getMilliseconds() / 1000) / 60;
       const hour = Number(local.hour) % 12 + minute / 60;
       // Different lengths keep coincident minute hands visible as coloured tips.
-      return <g key={handZone} className="zone-hands" data-zone={handZone} style={{ "--hand-color": color } as CSSProperties}>
+      return <g key={`${index}-${handZone}`} className="zone-hands" data-zone={handZone} style={{ "--hand-color": color } as CSSProperties}>
         <line x1="160" y1="160" x2="160" y2={76 + index * 10} data-angle={hour * 30} data-period="43200" transform={`rotate(${hour * 30} 160 160)`} className="hand hour-hand" />
         <line x1="160" y1="160" x2="160" y2={36 + index * 12} data-angle={minute * 6} data-period="3600" transform={`rotate(${minute * 6} 160 160)`} className="hand minute-hand" />
       </g>;
@@ -153,13 +153,20 @@ export function ClockFace({ now, zone, style, seconds, stacked = false, animate 
   </svg>;
 }
 export function WorldClocks({ now, settings, active = true, fit = false }: { now: Date; settings: Settings; active?: boolean; fit?: boolean }) {
+  const zones = clockZones(settings.cities);
   const region = useRef<HTMLElement>(null);
   const [available, setAvailable] = useState({ width: 0, height: 0 });
   useLayoutEffect(() => {
     if (!fit || !region.current) return;
     const measure = () => {
-      const rect = region.current?.getBoundingClientRect();
-      if (rect) setAvailable({ width: rect.width, height: rect.height });
+      const element = region.current;
+      if (!element) return;
+      // Layout dimensions stay unchanged when the Home editor scales the screen.
+      const padding = getComputedStyle(element);
+      setAvailable({
+        width: element.clientWidth - parseFloat(padding.paddingLeft) - parseFloat(padding.paddingRight),
+        height: element.clientHeight - parseFloat(padding.paddingTop) - parseFloat(padding.paddingBottom),
+      });
     };
     measure();
     const observer = new ResizeObserver(measure);
@@ -175,6 +182,7 @@ export function WorldClocks({ now, settings, active = true, fit = false }: { now
     ? Math.max(24, Math.min(settings.size, stacked ? available.width : (available.width - gap * (count - 1)) / count,
         stacked ? (available.height - gap * (count - 1)) / count - 40 : available.height - 40))
     : settings.size;
+  const dialLabels = analog && settings.labels && fittedSize >= (shared ? 200 : 160);
   const regionStyle = { "--clock-size": `${fittedSize}px`, ...(fit ? { gap: `${gap}px` } : {}) } as CSSProperties;
   if (analog && settings.stackedAnalogue) {
     const description = zones.map(({ label, zone }) => {
@@ -183,19 +191,19 @@ export function WorldClocks({ now, settings, active = true, fit = false }: { now
     }).join("; ");
     return <section ref={region} className="world-clocks shared-clock" aria-label="World clocks" style={regionStyle}>
       <time className="world-clock" dateTime={now.toISOString()} aria-label={description}>
-        <div className="clock-art"><ClockFace now={now} zone={zones[0].zone} style={settings.style} seconds={settings.seconds} stacked animate={active} /></div>
-        <div className="clock-legend" aria-label="Hand colours">
-          {zones.map(({ label, color }) => <span key={label} className="legend-item" title={label} style={{ "--hand-color": color } as CSSProperties}><i aria-hidden="true" />{settings.labels ? label : <span className="sr-only">{label}</span>}</span>)}
-        </div>
+        <div className="clock-art"><ClockFace now={now} zone={zones[0].zone} style={settings.style} seconds={settings.seconds} stacked animate={active} zones={zones} dialLabels={dialLabels} /></div>
+        {!dialLabels && <div className="clock-legend" aria-label="Hand colours">
+          {zones.map(({ label, color }, index) => <span key={index} className="legend-item" title={label} style={{ "--hand-color": color } as CSSProperties}><i aria-hidden="true" />{settings.labels ? label : <span className="sr-only">{label}</span>}</span>)}
+        </div>}
       </time>
     </section>;
   }
   return <section ref={region} className={`world-clocks layout-${settings.layout}`} aria-label="World clocks" style={regionStyle}>
-    {zones.map(({ label, zone }) => {
+    {zones.map(({ label, zone }, index) => {
       const time = zonedTime(now, zone);
-      return <time key={zone} className="world-clock" dateTime={now.toISOString()} aria-label={`${label}, ${time.hour}:${time.minute}:${time.second}`}>
-        <div className="clock-art"><ClockFace now={now} zone={zone} style={settings.style} seconds={settings.seconds} animate={active} /></div>
-        {settings.labels && <span className="city-label">{label}</span>}
+      return <time key={`${index}-${zone}`} className="world-clock" dateTime={now.toISOString()} aria-label={`${label}, ${time.hour}:${time.minute}:${time.second}`}>
+        <div className="clock-art"><ClockFace now={now} zone={zone} style={settings.style} seconds={settings.seconds} animate={active} zones={zones} dialLabels={dialLabels} /></div>
+        {settings.labels && !dialLabels && <span className="city-label">{label}</span>}
       </time>;
     })}
   </section>;
@@ -203,7 +211,7 @@ export function WorldClocks({ now, settings, active = true, fit = false }: { now
 export function ClockSettings({ settings, onChange, theme, onThemeChange, onClose, now }: { settings: Settings; onChange: (settings: Settings) => void; theme: Theme; onThemeChange: (theme: Theme) => void; onClose: () => void; now: Date }) {
   const update = (patch: Partial<Settings>) => onChange({ ...settings, ...patch });
   return <Dialog open onOpenChange={open => { if (!open) onClose(); }}>
-    <DialogContent className="settings-dialog">
+    <DialogContent className="settings-dialog" layout="viewport">
       <header className="settings-header"><span className="settings-eyebrow">PERSONALIZE / 01</span><DialogTitle className="text-2xl font-normal tracking-tight">Settings</DialogTitle><DialogDescription>Personalize your clocks and desktop.</DialogDescription></header>
       <div className="settings-body">
       <div className="settings-gallery">
@@ -215,6 +223,15 @@ export function ClockSettings({ settings, onChange, theme, onThemeChange, onClos
       </div></fieldset>)}
       </div>
       <section className="settings-controls" aria-label="Display and desktop settings">
+      <h3>Cities</h3>
+      <div className="clock-city-settings">
+        {settings.cities.map((city, index) => <div className="clock-city-setting" key={index}>
+          <label htmlFor={`clock-city-${index}`}><i aria-hidden="true" style={{ background: clockZones(settings.cities)[index].color }} />Clock {index + 1}</label>
+          <select id={`clock-city-${index}`} value={city} onChange={event => update({ cities: settings.cities.map((current, slot) => slot === index ? event.target.value : current) })}>
+            {[...new Set([city, ...cityOptions])].sort((a, b) => cityName(a).localeCompare(cityName(b))).map(zone => <option key={zone} value={zone}>{cityName(zone)} · {zone.replace(/_/g, " ")}</option>)}
+          </select>
+        </div>)}
+      </div>
       <h3>Display</h3>
       <div className="setting-row"><span id="layout-label">Separate clock layout</span><div className="segmented" role="group" aria-labelledby="layout-label">{(["row", "stack"] as const).map(layout => <Button key={layout} variant={settings.layout === layout ? "default" : "ghost"} aria-pressed={settings.layout === layout} onClick={() => update({ layout })}>{layout === "row" ? "Side by side" : "Vertical"}</Button>)}</div></div>
       <div className="setting-row size-row">
@@ -231,6 +248,8 @@ export function ClockSettings({ settings, onChange, theme, onThemeChange, onClos
         ["labels", "City labels", ""],
       ] as const).map(([key, label, hint]) => <div key={key} className="setting-row toggle-row"><label htmlFor={`setting-${key}`}>{label}{hint && <small>{hint}</small>}</label><Switch id={`setting-${key}`} checked={settings[key]} onCheckedChange={checked => update({ [key]: checked })} /></div>)}
       <div className="desktop-settings"><h3>Desktop</h3><TaskbarControl /></div>
+      <QuickSettingsOptions />
+      <section className="grid gap-4 border-t border-border pt-6"><h3>Game Mode</h3><GameModeOptions /></section>
       <LauncherSettings />
       </section>
       </div>

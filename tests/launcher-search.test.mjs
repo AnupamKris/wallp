@@ -23,6 +23,13 @@ test('search shortcuts require a prefix and preserve the search query', () => {
   assert.equal(parseBang('github'), null);
   assert.equal(parseBang('unknown term'), null);
 });
+test('file bang requires a space and accepts the optional exclamation mark', () => {
+  assert.deepEqual(parseBang('f budget report'), { key: 'f', name: 'Files', query: 'budget report' });
+  assert.deepEqual(parseBang('!F résumé.pdf'), { key: 'f', name: 'Files', query: 'résumé.pdf' });
+  assert.equal(parseBang('f ').query, '');
+  assert.equal(parseBang('f'), null);
+  assert.equal(parseBang('firefox'), null);
+});
 test('app matching ranks exact names first, then prefixes, then word matches', () => {
   const apps = [
     { id: '1', name: 'Visual Studio Code' },
@@ -38,4 +45,14 @@ test('app matching ranks exact names first, then prefixes, then word matches', (
 test('paste and clipboard commands are explicit and case insensitive', () => {
   for (const query of ['paste', ' Paste ', 'clipboard', 'Clipboard History']) assert.equal(isClipboardCommand(query), true);
   for (const query of ['g paste', 'pastebin', 'clipboard.exe']) assert.equal(isClipboardCommand(query), false);
+});
+
+test('wallp commands reach the tray actions by name', async () => {
+  const { searchWallpCommands } = await import('../src/launcher-search.ts');
+  assert.equal(searchWallpCommands('taskbar')[0]?.action, 'restore_taskbar');
+  assert.equal(searchWallpCommands('restore taskbar')[0]?.action, 'restore_taskbar');
+  assert.equal(searchWallpCommands('reload')[0]?.action, 'reload');
+  assert.equal(searchWallpCommands('Quit')[0]?.action, 'quit');
+  assert.deepEqual(searchWallpCommands(''), []);
+  assert.deepEqual(searchWallpCommands('quite a lot'), []);
 });

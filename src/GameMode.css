@@ -1,0 +1,108 @@
+.game-home { position: absolute; inset: 0; z-index: 5; display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; overflow: hidden; isolation: isolate; }
+.game-backdrop { position: absolute; inset: 0 0 auto; z-index: -1; width: 100%; height: 72%; object-fit: cover; object-position: center top; opacity: .45; pointer-events: none; mask-image: linear-gradient(to bottom, #000 35%, transparent); }
+/* Keeps the title and controls readable over bright artwork. */
+.game-scrim { position: absolute; inset: 0; z-index: -1; pointer-events: none; background: linear-gradient(to right, var(--background) 0%, color-mix(in oklch, var(--background) 70%, transparent) 35%, transparent 75%); }
+.game-topbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 20px clamp(16px, 3vw, 48px) 0; }
+.game-spotlight { display: flex; flex-direction: column; justify-content: flex-end; gap: 14px; min-width: 0; min-height: clamp(200px, 40vh, 480px); padding: 24px clamp(16px, 3vw, 48px) 28px; }
+.game-title { max-width: min(900px, 100%); font-size: clamp(28px, 4vw, 56px); font-weight: 500; line-height: 1.15; padding-bottom: .04em; letter-spacing: -.02em; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.game-message { display: flex; align-items: flex-start; gap: 12px; max-width: 720px; padding: 12px 14px; }
+.game-library { display: flex; flex-direction: column; min-height: 0; }
+.game-library-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 0 clamp(16px, 3vw, 48px) 12px; }
+.game-shelf { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(150px, 40%), 1fr)); align-content: start; gap: 20px 16px; min-height: 0; overflow-y: auto; padding: 8px clamp(16px, 3vw, 48px) 24px; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+.game-card { display: flex; flex-direction: column; gap: 8px; min-width: 0; padding: 0; border: 0; background: none; color: inherit; text-align: left; cursor: pointer; outline: none; }
+.game-cover { position: relative; display: block; width: 100%; aspect-ratio: 2 / 3; overflow: hidden; background: var(--card); transition: transform 160ms ease-out, box-shadow 160ms ease-out; }
+.game-card:hover .game-cover, .game-card[data-selected="true"] .game-cover { transform: translateY(-3px); }
+.game-card:focus-visible .game-cover, .game-input-mode .game-card[data-game-focus="true"] .game-cover { box-shadow: 0 0 0 2px var(--background), 0 0 0 4px var(--ring); transform: translateY(-3px); }
+.game-input-mode .game-card[data-game-focus="true"] { outline: none; }
+.game-card[data-hidden="true"] .game-cover { opacity: .45; }
+.game-art { width: 100%; height: 100%; object-fit: cover; }
+.game-art-fallback { display: grid; place-items: center; width: 100%; height: 100%; }
+.game-art-fallback img { width: 45%; max-width: 96px; aspect-ratio: 1; object-fit: contain; }
+.game-cover-add { display: grid; place-items: center; background: transparent; }
+.game-card-name { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; font-size: 12px; line-height: 1.35; }
+.game-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; padding: 10px clamp(16px, 3vw, 48px); background: var(--background); }
+.game-input-mode [data-game-focus="true"] { outline: 2px solid var(--ring); outline-offset: 3px; }
+
+/* Hold loader: Home recedes behind a vignette while letterbox bars close in and the ring charges. */
+.game-hold { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; pointer-events: none; }
+.game-hold-vignette { position: absolute; inset: 0; background: radial-gradient(ellipse at center, color-mix(in oklch, var(--background) 30%, transparent) 0%, color-mix(in oklch, var(--background) 92%, transparent) 70%); opacity: calc(.35 + var(--p) * .65); animation: game-fade 220ms ease-out; }
+.game-hold-bar { position: absolute; left: 0; right: 0; height: 11vh; background: var(--background); transition: transform 80ms linear; }
+.game-hold-bar-top { top: 0; border-bottom: 1px solid color-mix(in oklch, var(--primary) calc(var(--p) * 50%), transparent); transform: translateY(calc((1 - var(--p)) * -100%)); }
+.game-hold-bar-bottom { bottom: 0; border-top: 1px solid color-mix(in oklch, var(--primary) calc(var(--p) * 50%), transparent); transform: translateY(calc((1 - var(--p)) * 100%)); }
+.game-hold-core { position: relative; display: grid; justify-items: center; gap: 20px; animation: game-hold-in 320ms cubic-bezier(.22, 1, .36, 1) both; }
+.game-hold-ring { position: relative; display: grid; place-items: center; width: 176px; aspect-ratio: 1; filter: drop-shadow(0 0 calc(var(--p) * 28px) color-mix(in oklch, var(--primary) 55%, transparent)); }
+.game-hold-dial { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; transform: rotate(-90deg); }
+.game-hold-dial circle { fill: none; }
+.game-hold-ring-track { stroke: var(--border); stroke-width: 2; }
+.game-hold-arc { stroke: var(--primary); stroke-width: 4; transition: stroke-dashoffset 80ms linear; }
+.game-hold-spinner { stroke: color-mix(in oklch, var(--muted-foreground) 60%, transparent); stroke-width: 1; stroke-dasharray: 2 9; transform-origin: 84px 84px; animation: game-spin 9s linear infinite; }
+.game-hold-tick { stroke: var(--border); stroke-width: 2; transition: stroke 120ms ease-out; }
+.game-hold-tick[data-lit] { stroke: var(--primary); }
+.game-hold-icon { transform: scale(calc(.9 + var(--p) * .2)); transition: transform 80ms linear; animation: game-pulse 1.1s ease-in-out infinite; }
+.game-hold-kicker { font-size: 11px; letter-spacing: .4em; text-transform: uppercase; padding-left: .4em; }
+.game-hold-word { font-size: clamp(28px, 3.4vw, 44px); font-weight: 500; line-height: 1.1; text-transform: uppercase; letter-spacing: calc(.08em + var(--p) * .14em); padding-left: calc(.08em + var(--p) * .14em); transition: letter-spacing 80ms linear, padding 80ms linear; }
+.game-hold-meter { width: 220px; height: 2px; background: var(--border); overflow: hidden; }
+.game-hold-meter-fill { height: 100%; transform: scaleX(var(--p)); transition: transform 80ms linear; }
+
+/* Entering: Home recedes while the shortcut is held, then a title sequence hands off to Game Mode. */
+.desktop-screen > .home-layout { transition: transform 240ms ease-out, filter 240ms ease-out; }
+/* GameHoldOverlay sets the hold transform and filter inline on Home. */
+.game-holding .desktop-screen > .home-layout { transition: transform 80ms linear, filter 80ms linear; }
+.game-home { --intro: 0ms; animation: game-enter 700ms cubic-bezier(.22, 1, .36, 1) var(--intro) both; }
+.game-home[data-intro] { --intro: 950ms; }
+.game-backdrop { animation: game-backdrop-in 1400ms cubic-bezier(.22, 1, .36, 1) var(--intro) both; }
+.game-topbar, .game-spotlight, .game-library-bar, .game-footer { animation: game-rise 560ms cubic-bezier(.22, 1, .36, 1) both; animation-delay: calc(var(--intro) + 60ms); }
+.game-spotlight { animation-name: game-rise-wide; animation-duration: 760ms; animation-delay: calc(var(--intro) + 120ms); }
+.game-library-bar { animation-delay: calc(var(--intro) + 200ms); }
+.game-footer { animation-delay: calc(var(--intro) + 260ms); }
+.game-card { animation: game-card-in 520ms cubic-bezier(.22, 1, .36, 1) both; animation-delay: calc(var(--intro) + 240ms + var(--game-index, 12) * 40ms); }
+
+.game-intro { position: fixed; inset: 0; z-index: 70; display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); place-items: center; overflow: hidden; pointer-events: none; }
+.game-intro > * { grid-area: 1 / 1; }
+.game-intro-curtain { position: absolute; inset: 0; animation: game-curtain 520ms cubic-bezier(.4, 0, .2, 1) 950ms both; }
+.game-intro-glow { width: 120vmax; aspect-ratio: 1; background: radial-gradient(circle, color-mix(in oklch, var(--primary) 22%, transparent) 0%, transparent 45%); animation: game-glow 1300ms cubic-bezier(.22, 1, .36, 1) both; }
+.game-intro-shock { width: 176px; aspect-ratio: 1; border: 2px solid var(--primary); border-radius: 50%; animation: game-shock 900ms cubic-bezier(.16, 1, .3, 1) both; }
+.game-intro-shock-late { border-width: 1px; animation-delay: 140ms; animation-duration: 1100ms; }
+.game-intro-sweep { position: absolute; inset: -20% auto -20% 0; width: 35vw; background: linear-gradient(90deg, transparent, color-mix(in oklch, var(--primary) 16%, transparent), transparent); transform: translateX(-120%) skewX(-18deg); animation: game-sweep 900ms cubic-bezier(.65, 0, .35, 1) 260ms both; }
+.game-intro-mark { position: relative; display: grid; justify-items: center; gap: 16px; animation: game-mark-out 360ms cubic-bezier(.4, 0, 1, 1) 860ms both; }
+.game-intro-icon { animation: game-icon-in 600ms cubic-bezier(.22, 1, .36, 1) both; }
+.game-intro-word { font-size: clamp(36px, 5.5vw, 76px); font-weight: 500; line-height: 1; text-transform: uppercase; letter-spacing: .3em; padding-left: .3em; animation: game-word-in 800ms cubic-bezier(.22, 1, .36, 1) 80ms both; }
+.game-intro-rule { width: min(420px, 60vw); height: 2px; animation: game-rule-in 600ms cubic-bezier(.65, 0, .35, 1) 280ms both; }
+.game-intro-bar { position: absolute; left: 0; right: 0; height: 11vh; background: var(--background); }
+.game-intro-bar-top { top: 0; border-bottom: 1px solid color-mix(in oklch, var(--primary) 50%, transparent); animation: game-bar-top 640ms cubic-bezier(.65, 0, .35, 1) 1020ms both; }
+.game-intro-bar-bottom { bottom: 0; border-top: 1px solid color-mix(in oklch, var(--primary) 50%, transparent); animation: game-bar-bottom 640ms cubic-bezier(.65, 0, .35, 1) 1020ms both; }
+
+/* Leaving: Game Mode surges forward and fades to dark, then Home settles back into place. */
+.game-home[data-leaving] { animation: game-leave 460ms cubic-bezier(.4, 0, 1, 1) both; pointer-events: none; }
+.game-returning > .home-layout { animation: home-return 640ms cubic-bezier(.22, 1, .36, 1) 120ms both; }
+
+/* Hyper exit: Game Mode collapses like a CRT powering off. */
+.game-home[data-leaving][data-transition="hyper"] { animation: game-crt-off 460ms cubic-bezier(.7, 0, .3, 1) both; }
+@keyframes game-crt-off { 0% { transform: none; filter: none; } 45% { opacity: 1; transform: scale(1.02, .006); filter: brightness(3) blur(1px); } 100% { opacity: 0; transform: scale(0, .006); filter: brightness(4) blur(2px); } }
+@keyframes game-enter { from { opacity: 0; transform: scale(1.08); filter: blur(10px) brightness(1.6); } }
+@keyframes game-leave { to { opacity: 0; transform: scale(1.08); filter: blur(10px) brightness(.3); } }
+@keyframes game-rise { from { opacity: 0; transform: translateY(16px); } }
+@keyframes game-rise-wide { from { opacity: 0; transform: translateX(-32px); filter: blur(6px); } }
+@keyframes game-card-in { from { opacity: 0; transform: translateY(28px) scale(.94); } }
+@keyframes game-backdrop-in { from { opacity: 0; transform: scale(1.12); } }
+@keyframes home-return { from { opacity: 0; transform: scale(.94); filter: blur(6px); } }
+@keyframes game-hold-in { from { opacity: 0; transform: scale(.85); filter: blur(6px); } }
+@keyframes game-fade { from { opacity: 0; } }
+@keyframes game-spin { to { transform: rotate(360deg); } }
+@keyframes game-pulse { 50% { opacity: .7; } }
+@keyframes game-curtain { to { opacity: 0; } }
+@keyframes game-glow { from { opacity: 0; transform: scale(.4); } 40% { opacity: 1; } to { opacity: 0; transform: scale(1.1); } }
+@keyframes game-shock { from { opacity: 1; transform: scale(1); } to { opacity: 0; transform: scale(9); } }
+@keyframes game-sweep { to { transform: translateX(320%) skewX(-18deg); } }
+@keyframes game-icon-in { from { opacity: 0; transform: scale(1.6); filter: blur(8px); } }
+@keyframes game-word-in { from { opacity: 0; letter-spacing: 1em; padding-left: 1em; filter: blur(12px); } }
+@keyframes game-rule-in { from { transform: scaleX(0); } }
+@keyframes game-mark-out { to { opacity: 0; transform: scale(1.12); filter: blur(10px); } }
+@keyframes game-bar-top { to { transform: translateY(-100%); } }
+@keyframes game-bar-bottom { to { transform: translateY(100%); } }
+@media (max-height: 760px) { .game-spotlight { min-height: 150px; padding-block: 16px 20px; } .game-title { font-size: clamp(24px, 3vw, 40px); } .game-hold-ring { width: 140px; } }
+@media (max-width: 600px) { .game-shelf { gap: 16px 12px; } .game-topbar { padding-top: 14px; } }
+@media (prefers-reduced-motion: reduce) { .game-home, .game-backdrop, .game-topbar, .game-spotlight, .game-library-bar, .game-footer, .game-card, .game-hold *, .game-returning > .home-layout { animation: none; transition: none; } .game-cover, .desktop-screen > .home-layout, .game-holding .desktop-screen > .home-layout { transition: none; transform: none; filter: none; } }
+
+/* Maia corners; tokens are 0 under Lyra. */
+.game-cover { border-radius: var(--radius-panel); }

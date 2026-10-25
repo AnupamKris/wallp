@@ -1,4 +1,4 @@
-export type Item = { id: string; title: string; done: boolean; due?: string; notified?: boolean };
+export type Item = { id: string; title: string; done: boolean; due?: string; notified?: boolean; source?: { title: string; url?: string; noteId?: string; spaceId?: string } };
 export type Items = { todos: Item[]; reminders: Item[] };
 export type ItemKind = keyof Items;
 export const productivityKey = "wallp.productivity";

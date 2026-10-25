@@ -51,8 +51,8 @@ struct TokenResponse {
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Address {
     #[serde(skip_serializing_if = "Option::is_none")]
-    name: Option<String>,
-    email: String,
+    pub(crate) name: Option<String>,
+    pub(crate) email: String,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -348,6 +348,7 @@ pub async fn email_disconnect(app: tauri::AppHandle) -> Result<(), String> {
     let _guard = crate::email_digest::SYNC.lock().await;
     crate::email_digest::clear(&app)?;
     crate::mail_cache::clear(&app)?;
+    crate::email_notifications::clear(&app);
     match keyring_entry()?.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
         Err(e) => Err(e.to_string()),
@@ -496,6 +497,16 @@ pub(crate) async fn digest_messages(
     through: i64,
     sample: bool,
 ) -> Result<Vec<Message>, String> {
+    received_messages(since, through, sample, &std::collections::HashSet::new()).await
+}
+
+/// Notification polling skips full-message downloads for already processed IDs.
+pub(crate) async fn received_messages(
+    since: i64,
+    through: i64,
+    sample: bool,
+    seen: &std::collections::HashSet<String>,
+) -> Result<Vec<Message>, String> {
     use futures::{StreamExt, TryStreamExt, stream};
     let token = access_token().await?;
     let http = reqwest::Client::builder()
@@ -529,7 +540,8 @@ pub(crate) async fn digest_messages(
             ids.extend(
                 messages
                     .iter()
-                    .filter_map(|m| m["id"].as_str().map(str::to_owned)),
+                    .filter_map(|m| m["id"].as_str().map(str::to_owned))
+                    .filter(|id| !seen.contains(id)),
             );
         }
         page = list["nextPageToken"].as_str().map(str::to_owned);
@@ -651,6 +663,113 @@ fn cached_inbox(app: &tauri::AppHandle, account: &str) -> Option<InboxPage> {
     crate::mail_cache::load_inbox(app, account).and_then(|data| serde_json::from_str(&data).ok())
 }
 
+/// AI mailbox lookup. Search pages are independent of the inbox UI/cache.
+#[tauri::command]
+pub async fn email_search(
+    query: String,
+    page_token: Option<String>,
+    max_results: Option<u32>,
+) -> Result<InboxPage, String> {
+    let limit = max_results.unwrap_or(10);
+    if query.chars().count() > 2000
+        || page_token.as_ref().is_some_and(|p| p.len() > 2000)
+        || !(1..=20).contains(&limit)
+    {
+        return Err("Invalid email search query, page token, or result limit (1–20).".into());
+    }
+    let token = access_token().await?;
+    let http = reqwest::Client::builder()
+        .timeout(Duration::from_secs(45))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let mut request = http
+        .get(format!("{GMAIL}/messages"))
+        .bearer_auth(&token)
+        .query(&[("q", query.as_str()), ("maxResults", &limit.to_string())]);
+    if let Some(page) = page_token.as_deref() {
+        request = request.query(&[("pageToken", page)]);
+    }
+    let list = api(request).await?;
+    let ids: Vec<String> = list["messages"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|m| m["id"].as_str().map(str::to_owned))
+        .collect();
+    let messages = fetch_metas(&http, &token, &ids).await;
+    // Never report an incomplete lookup as a complete search page.
+    if messages.len() != ids.len() {
+        return Err("Gmail could not fetch all search results. Please retry.".into());
+    }
+    Ok(InboxPage {
+        messages,
+        next_page_token: list["nextPageToken"].as_str().map(str::to_owned),
+    })
+}
+
+fn ai_message(message: Message) -> Value {
+    // Send one bounded body; HTML-only messages retain their source for the AI.
+    let (body, format) = match (message.body.as_deref(), message.body_html.as_deref()) {
+        (Some(text), _) if !text.trim().is_empty() => (text, "text/plain"),
+        (_, Some(html)) => (html, "text/html"),
+        _ => (message.snippet.as_str(), "text/plain"),
+    };
+    let truncated = body.chars().count() > 14_000;
+    let body: String = body.chars().take(14_000).collect();
+    json!({
+        "id": message.id, "threadId": message.thread_id,
+        "from": message.from, "to": message.to, "subject": message.subject,
+        "date": message.date, "unread": message.unread,
+        "body": body, "bodyFormat": format, "bodyTruncated": truncated,
+        "url": format!("https://mail.google.com/mail/u/0/#all/{}", message.thread_id)
+    })
+}
+
+#[cfg(test)]
+mod ai_tests {
+    use super::*;
+
+    #[test]
+    fn ai_body_is_bounded_unicode_safe_and_preserves_unread() {
+        let message: Message = serde_json::from_value(json!({
+            "id": "abc123", "threadId": "def456", "from": { "email": "sender@example.com" },
+            "to": [], "subject": "Flight", "snippet": "Preview", "date": 123,
+            "unread": true, "bodyHtml": "🛫".repeat(14_001)
+        }))
+        .unwrap();
+        let result = ai_message(message);
+        assert_eq!(result["bodyFormat"], "text/html");
+        assert_eq!(result["bodyTruncated"], true);
+        assert_eq!(result["unread"], true);
+        assert_eq!(result["body"].as_str().unwrap().chars().count(), 14_000);
+        assert!(result.get("bodyHtml").is_none());
+    }
+}
+
+/// AI reads must not use email_thread, which marks conversations read.
+#[tauri::command]
+pub async fn email_fetch(message_id: String) -> Result<Value, String> {
+    if message_id.is_empty()
+        || message_id.len() > 128
+        || !message_id.bytes().all(|b| b.is_ascii_hexdigit())
+    {
+        return Err("Use a message ID returned by email search.".into());
+    }
+    let token = access_token().await?;
+    let http = reqwest::Client::builder()
+        .timeout(Duration::from_secs(45))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let value = api(http
+        .get(format!("{GMAIL}/messages/{message_id}"))
+        .query(&[("format", "full")])
+        .bearer_auth(&token))
+    .await?;
+    let message: GmailMessage =
+        serde_json::from_value(value).map_err(|e| format!("Unexpected Gmail message: {e}"))?;
+    Ok(ai_message(to_message(message, true)))
+}
+
 fn save_inbox(app: &tauri::AppHandle, account: &str, inbox: &InboxPage) {
     if let Ok(data) = serde_json::to_string(inbox) {
         let _ = crate::mail_cache::save_inbox(app, account, &data);
@@ -666,6 +785,29 @@ fn save_thread(app: &tauri::AppHandle, account: &str, thread_id: &str, messages:
 #[tauri::command]
 pub fn email_cached_inbox(app: tauri::AppHandle) -> Result<Option<InboxPage>, String> {
     Ok(cached_inbox(&app, &account_email()?))
+}
+
+#[tauri::command]
+pub async fn email_search_cached(
+    app: tauri::AppHandle,
+    query: String,
+) -> Result<Vec<Value>, String> {
+    if query.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    if query.len() > 2000 {
+        return Err("Search is too long.".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let account = account_email()?;
+        let mut results = crate::mail_cache::search(&app, &account, query.trim())?;
+        for result in &mut results {
+            result["account"] = Value::String(account.clone());
+        }
+        Ok(results)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Syncs the inbox and returns the whole merged listing. With no page token

@@ -1,10 +1,43 @@
 import { addItem, changeItem, loadItems, removeItem, type ItemKind } from "./productivity-store.ts";
+import { invoke as nativeInvoke } from "@tauri-apps/api/core";
 
 export type ToolCall = { id: string; type: "function"; function: { name: string; arguments: string } };
 export type AiResponse = { content: string | null; tool_calls?: ToolCall[] };
 export type ToolMessage = { role: "assistant"; content: string | null; tool_calls: ToolCall[] } |
   { role: "tool"; tool_call_id: string; content: string };
 export type ToolResult = { ok: boolean; summary?: string; error?: string; [key: string]: unknown };
+export type ToolActivity = { id: string; label: string; detail: string; status: "running" | "complete" | "error" | "stopped" };
+export type AiProgress = { phase: "thinking" | "tools" | "reviewing"; activities: ToolActivity[] };
+
+const activityLabels: Record<string, [string, string]> = {
+  search_emails: ["Searching emails", "Looking through your connected mailbox"],
+  fetch_email: ["Reading an email", "Opening the message to read its contents"],
+  list_items: ["Checking your lists", "Looking up saved todos and reminders"],
+  create_todo: ["Adding a todo", "Saving it to your Todos panel"],
+  create_reminder: ["Setting a reminder", "Saving the reminder and its scheduled time"],
+  update_item: ["Updating an item", "Saving changes to your list"],
+  delete_item: ["Deleting an item", "Removing the requested item from your list"],
+};
+
+function activityDetail(name: string, result: ToolResult): string {
+  if (!result.ok) return "This step failed. See the error in the conversation.";
+  if (name === "search_emails") {
+    const page = result.page as { messages?: unknown[]; nextPageToken?: string } | undefined;
+    const count = page?.messages?.length ?? 0;
+    return `${count === 0 ? "No matching emails" : `Found ${count} email${count === 1 ? "" : "s"}`}${page?.nextPageToken ? " · More results available" : ""}`;
+  }
+  if (name === "fetch_email") {
+    const message = result.message as { subject?: string; bodyTruncated?: boolean } | undefined;
+    const subject = typeof message?.subject === "string" ? message.subject.replace(/\s+/g, " ").trim().slice(0, 160) : "Message read";
+    return `${subject || "Message read"}${message?.bodyTruncated ? " · Long message, read in part" : ""}`;
+  }
+  if (name === "list_items") {
+    const items = result.items as { todos?: unknown[]; reminders?: unknown[] } | unknown[] | undefined;
+    const count = Array.isArray(items) ? items.length : (items?.todos?.length ?? 0) + (items?.reminders?.length ?? 0);
+    return `Found ${count} saved item${count === 1 ? "" : "s"}`;
+  }
+  return "Changes saved";
+}
 
 function title(value: unknown): string {
   if (typeof value !== "string" || !value.trim() || value.trim().length > 300) throw new Error("Title must contain 1 to 300 characters.");
@@ -61,17 +94,47 @@ export function executeTool(call: ToolCall): ToolResult {
   }
 }
 
+type NativeInvoke = (command: string, args: Record<string, unknown>) => Promise<unknown>;
+
+export async function executeAiTool(call: ToolCall, invoke: NativeInvoke = nativeInvoke): Promise<ToolResult> {
+  const name = call.function.name;
+  if (name !== "search_emails" && name !== "fetch_email") return executeTool(call);
+  try {
+    const args = JSON.parse(call.function.arguments);
+    if (!args || typeof args !== "object" || Array.isArray(args)) throw new Error("Expected an object of tool arguments.");
+    if (name === "search_emails") {
+      if (typeof args.query !== "string" || args.query.length > 2000) throw new Error("Provide a Gmail search query of at most 2000 characters (empty for recent mail).");
+      if (args.page_token !== undefined && (typeof args.page_token !== "string" || args.page_token.length > 2000)) throw new Error("Invalid search page token.");
+      if (args.max_results !== undefined && (!Number.isInteger(args.max_results) || args.max_results < 1 || args.max_results > 20)) throw new Error("max_results must be an integer from 1 to 20.");
+      const page = await invoke("email_search", { query: args.query, pageToken: args.page_token ?? null, maxResults: args.max_results ?? 10 });
+      return { ok: true, page };
+    }
+    if (typeof args.message_id !== "string" || !/^[a-fA-F0-9]{1,128}$/.test(args.message_id)) throw new Error("Use a message ID returned by search_emails.");
+    const message = await invoke("email_fetch", { messageId: args.message_id });
+    return { ok: true, message };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 // Only the current turn's exchanges are replayed; saved chats never re-run actions.
 export async function runAiTools(
   request: (exchanges: ToolMessage[]) => Promise<AiResponse>,
   active: () => boolean,
   onActions: (receipts: string[]) => void,
+  execute: (call: ToolCall) => ToolResult | Promise<ToolResult> = executeAiTool,
+  onProgress: (progress: AiProgress) => void = () => {},
 ): Promise<string | null> {
   const exchanges: ToolMessage[] = [];
   const receipts: string[] = [];
   const results = new Map<string, { call: string; result: ToolResult }>();
+  const activities: ToolActivity[] = [];
+  const progress = (phase: AiProgress["phase"]) => {
+    if (active()) onProgress({ phase, activities: activities.map(activity => ({ ...activity })) });
+  };
   try {
     for (let round = 0; round < 6; round++) {
+      progress(exchanges.length ? "reviewing" : "thinking");
       const response = await request(exchanges);
       if (!active()) return null;
       const calls = response.tool_calls ?? [];
@@ -85,9 +148,21 @@ export async function runAiTools(
         if (!active()) return null;
         const signature = JSON.stringify(call.function);
         const previous = results.get(call.id);
+        let activity: ToolActivity | undefined;
+        if (!previous) {
+          const [label, detail] = activityLabels[call.function.name] ?? ["Running a requested action", "Checking the requested operation"];
+          activity = { id: call.id, label, detail, status: "running" };
+          activities.push(activity);
+          progress("tools");
+        }
         const result = previous
           ? previous.call === signature ? previous.result : { ok: false, error: "Tool call ID was reused with different arguments." }
-          : executeTool(call);
+          : await execute(call);
+        if (activity) {
+          activity.status = result.ok ? "complete" : "error";
+          activity.detail = activityDetail(call.function.name, result);
+          progress("tools");
+        }
         if (!previous) {
           results.set(call.id, { call: signature, result });
           if (result.summary) receipts.push(result.summary);
@@ -100,6 +175,10 @@ export async function runAiTools(
     }
     throw new Error("AI reached the action limit. Review the saved changes before asking for more.");
   } catch (error) {
+    activities.filter(activity => activity.status === "running").forEach(activity => {
+      activity.status = "error"; activity.detail = "This step could not finish.";
+    });
+    progress("reviewing");
     // A network failure must never hide actions already saved to the app.
     if (receipts.length) return [...receipts, `AI stopped: ${error instanceof Error ? error.message : String(error)}`].join("\n\n");
     throw error;

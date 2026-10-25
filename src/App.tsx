@@ -1,16 +1,22 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { isTauri, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import "./App.css";
 import { ClockSettings, WorldClocks, loadSettings } from "./Clocks";
 import { Button } from "@/components/ui/button";
-import { ArrowDownIcon, PlusIcon, XIcon } from "@phosphor-icons/react";
+import { GearIcon, DesktopIcon, PlusIcon, XIcon } from "@phosphor-icons/react";
 import { useHomeShortcuts } from "./home-shortcuts";
 import { Workspace } from "./Workspace";
 import { TrayApps } from "./TrayApps";
+import { QuickSettings } from "./QuickSettings";
 import { startClockTicker } from "./clock-motion";
 import { useTheme } from "./Theme";
 import { EmailDigest } from "./EmailDigest";
+import { HomeLayout } from "./HomeLayout";
+import { DeskBuddy } from "./DeskBuddy";
+import { GameHome, prefetchGameLibrary } from "./GameMode";
+import { GameEntrance, GameHoldOverlay, useReducedGameMotion } from "./GameTransitions";
+import { useGameHold, useGameMode } from "./use-game-mode";
 
 type AppId = "pc" | "downloads" | "edge" | "steam" | "riot" | "t3";
 const shortcuts: { id: AppId; label: string }[] = [
@@ -59,8 +65,39 @@ function App() {
   const [paused, setPaused] = useState(isTauri);
   const [hidden, setHidden] = useState(() => document.hidden);
   const [error, setError] = useState("");
+  const game = useGameMode(!workspace && !paused && !hidden, !settingsOpen);
+  const [gameLibrary, setGameLibrary] = useState(true);
+  useEffect(() => { if (game.active) setGameLibrary(true); }, [game.active]);
+  const gameOpen = game.active && gameLibrary;
+  const reducedGameMotion = useReducedGameMotion();
+  // Keep Game Mode on screen briefly after leaving so it can animate out over Home.
+  const [gameLeaving, setGameLeaving] = useState(false);
+  const wasGameOpen = useRef(false);
+  useEffect(() => {
+    const left = wasGameOpen.current && !gameOpen;
+    wasGameOpen.current = gameOpen;
+    if (!left || reducedGameMotion) return;
+    setGameLeaving(true);
+    const id = setTimeout(() => setGameLeaving(false), 500);
+    return () => { clearTimeout(id); setGameLeaving(false); };
+  }, [gameOpen, reducedGameMotion]);
+  // Play the title sequence only when Game Mode itself turns on, not when returning from Home widgets.
+  const [gameIntro, setGameIntro] = useState(false);
+  // Motion variants continue from the loader's closed gates after a completed controller hold.
+  const [gameHeld, setGameHeld] = useState(false);
+  // Layout effect: the intro must mount before Game Mode Home first paints, or Home flashes between loader and intro.
+  useLayoutEffect(() => {
+    if (!game.active || reducedGameMotion) return;
+    setGameHeld(performance.now() - game.hold.heldAt < 400);
+    setGameIntro(true);
+    const id = setTimeout(() => setGameIntro(false), 2400);
+    return () => { clearTimeout(id); setGameIntro(false); };
+  }, [game.active, reducedGameMotion]);
+  const gameHolding = useGameHold(game.hold, progress => progress > 0) && !game.active;
+  useEffect(() => { if (gameHolding) prefetchGameLibrary(); }, [gameHolding]);
   const { pins, saving: savingPin, setPinned } = useHomeShortcuts(setError);
   async function launchPinned(id: string) {
+    if (!isTauri()) { setError("Open wallp on your desktop to launch apps."); return; }
     try { await invoke("launch_home_shortcut", { id }); setError(""); }
     catch (err) { setError(String(err)); }
   }
@@ -108,48 +145,58 @@ function App() {
     } catch (err) { setError(String(err)); }
   }
   function shortcut(id: AppId, label: string) {
-    return <button key={id} className="shortcut" aria-label={label} title={label} onClick={() => void launch(id)}><Icon name={id} /></button>;
+    return <button key={id} className="shortcut" aria-label={label} title={label} onClick={() => void launch(id)}><Icon name={id} /><span className="home-shortcut-label">{label}</span></button>;
+  }
+  function addHomeApp() {
+    if (!isTauri()) { setError("Open wallp on your desktop to add apps."); return; }
+    void invoke("open_launcher").catch(err => setError(String(err)));
   }
   return (
-    <main className={`desktop${paused ? " paused" : ""}`}>
+    <main className={`desktop${paused ? " paused" : ""}${gameHolding ? " game-holding" : ""}`}>
       <div className={`workspace-track${workspace ? " workspace-active" : ""}`}>
-      <section id="home-screen" className="desktop-screen" aria-label="Home" inert={workspace}>
-      <nav className="rail files" aria-label="Files and folders">
+      <section id="home-screen" className={`desktop-screen${gameLeaving ? " game-returning" : ""}`} aria-label="Home" inert={workspace}>
+      {!gameOpen && <>
+      <HomeLayout active={!workspace && !settingsOpen} editable={!game.active} actions={<div className="flex flex-wrap items-center gap-2">
+        {game.active ? <><Button variant="outline" size="sm" onClick={() => setGameLibrary(true)}>Games</Button><Button variant="outline" size="sm" onClick={game.exit}>Exit Game Mode</Button></> : <Button variant="outline" size="sm" title={`Hold ${game.bindings.controller === "chord" ? "View + Menu" : "Menu"} for 1 second, or Ctrl + Alt + ${game.bindings.letter}`} onClick={game.enter}>Game Mode <span className="text-muted-foreground">Ctrl + Alt + {game.bindings.letter}</span></Button>}
+      </div>} widgets={{
+      clocks: <WorldClocks now={now} settings={settings} active={clockActive && !workspace && !settingsOpen} fit />,
+      digest: <EmailDigest active={!paused && !hidden && !workspace} />,
+      files: <nav className="rail files" aria-label="Files and folders">
         {shortcut("pc", "This PC")}
         {shortcut("downloads", "Downloads")}
-      </nav>
-      <div className="home-content">
-        <WorldClocks now={now} settings={settings} active={clockActive && !workspace && !settingsOpen} fit />
-        <EmailDigest active={!paused && !hidden} />
-      </div>
-      <TrayApps active={!workspace && !paused} />
-      <nav className="rail applications" aria-label="Applications">
+      </nav>,
+      controls: <nav className="system-controls" aria-label="System controls">
+        <QuickSettings active={!workspace && !paused && !settingsOpen} />
+        <TrayApps active={!workspace && !paused} />
+        <Button variant="outline" className="tray-launcher" aria-label="Workspace" title="Workspace" aria-controls="workspace-screen" onClick={() => setWorkspace(true)}><DesktopIcon size={18} aria-hidden="true" /><span className="tray-launcher-label">Workspace</span></Button>
+        <Button variant="outline" className="tray-launcher" aria-label="Settings" title="wallp settings" onClick={() => setSettingsOpen(true)}><GearIcon size={18} aria-hidden="true" /><span className="tray-launcher-label">wallp settings</span></Button>
+      </nav>,
+      apps: <nav className="rail applications" aria-label="Applications">
         {shortcuts.map(({ id, label }) => shortcut(id, label))}
         {pins.map(app => <div className="home-app" key={app.id}>
           <button className="shortcut" aria-label={app.name} title={app.name} onClick={() => void launchPinned(app.id)}>
             <span className="home-app-fallback">{app.name.slice(0, 2).toUpperCase()}</span>
             {app.icon && <img src={app.icon} alt="" onError={event => { event.currentTarget.style.display = "none"; }} />}
+            <span className="home-shortcut-label">{app.name}</span>
           </button>
           <button className="home-app-remove" title={`Remove ${app.name} from Home`} aria-label={`Remove ${app.name} from Home`} disabled={savingPin} onClick={() => void setPinned(app.id, false)}><XIcon size={12} /></button>
         </div>)}
-        <button className="shortcut" aria-label="Add app to Home" title="Add app from the command menu" onClick={() => {
-          if (!isTauri()) { setError("Open wallp on your desktop to add apps."); return; }
-          void invoke("open_launcher").catch(err => setError(String(err)));
-        }}><PlusIcon /></button>
-      </nav>
-      <nav className="dock" aria-label="Dock">{shortcut("t3", "T3 Code")}</nav>
+        <button className="shortcut" aria-label="Add app to Home" title="Add app from the command menu" onClick={addHomeApp}><PlusIcon /><span className="home-shortcut-label">Add app</span></button>
+      </nav>,
+      dock: <nav className="dock" aria-label="Dock">{shortcut("t3", "T3 Code")}</nav>,
+      buddy: tile => <DeskBuddy variant={tile.variant} active={!paused && !hidden && !workspace && !settingsOpen} />,
+      }} />
+      </>}
+      {(gameOpen || gameLeaving) && <GameHome leaving={!gameOpen} intro={gameIntro && gameOpen} held={gameHeld} transition={game.bindings.transition} pins={pins} launch={target => void launch(target)} launchPinned={id => void launchPinned(id)} onWidgets={() => setGameLibrary(false)} onExit={game.exit} onSettings={() => setSettingsOpen(true)} onAdd={addHomeApp} connected={game.connected} suspended={game.suspended} mouseActive={game.mouseActive} inputError={game.inputError} error={error} onDismissError={() => setError("")} />}
       </section>
       <section id="workspace-screen" className="workspace-screen" aria-label="Workspace" inert={!workspace}>
-        <Workspace onHome={() => setWorkspace(false)} onSettings={() => setSettingsOpen(true)} />
+        <Workspace active={workspace && !settingsOpen} onHome={() => setWorkspace(false)} onSettings={() => setSettingsOpen(true)} />
       </section>
       </div>
-      {!workspace && <Button variant="outline" className="workspace-trigger" aria-controls="workspace-screen" onClick={() => setWorkspace(true)}>
-        <span className="workspace-position" aria-hidden="true"><i className={!workspace ? "active" : ""} /><i className={workspace ? "active" : ""} /></span>
-        Workspace<ArrowDownIcon />
-      </Button>}
-      {!workspace && <button className="shortcut settings-trigger" aria-label="Settings" title="Settings" onClick={() => setSettingsOpen(true)}><Icon name="settings" /></button>}
       {settingsOpen && <ClockSettings settings={settings} onChange={setSettings} theme={theme} onThemeChange={setTheme} onClose={() => setSettingsOpen(false)} now={now} />}
-      {error && <div className="launch-error" role="alert" title={error}>
+      <GameHoldOverlay hold={game.hold} transition={game.bindings.transition} exiting={game.active} />
+      {gameIntro && gameOpen && <GameEntrance transition={game.bindings.transition} covered={gameHeld} onDone={() => setGameIntro(false)} />}
+      {error && !gameOpen && <div className="launch-error" role="alert" title={error}>
         <Icon name="alert" /><span className="sr-only">{error}</span>
         <button className="shortcut" aria-label="Dismiss error" title="Dismiss error" onClick={() => setError("")}><Icon name="close" /></button>
       </div>}

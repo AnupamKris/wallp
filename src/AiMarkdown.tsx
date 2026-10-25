@@ -1,4 +1,5 @@
 import Markdown from "react-markdown";
+import { Button } from "@/components/ui/button";
 import remarkGfm from "remark-gfm";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { isTauri } from "@tauri-apps/api/core";
@@ -26,7 +27,7 @@ function CodeBlock({ children }: { children?: ReactNode }) {
     timer.current = setTimeout(() => setCopyStatus(""), 2500);
   }
   return <div className="ai-code-block">
-    <div className="ai-code-toolbar"><span>{language ?? highlighted?.language ?? "text"}</span><button aria-label="Copy code" onClick={() => void copy()}>{copyStatus || "Copy code"}</button><span className="command-ai-announcement" role="status">{copyStatus}</span></div>
+    <div className="ai-code-toolbar"><span>{language ?? highlighted?.language ?? "text"}</span><Button variant="ghost" size="xs" aria-label="Copy code" onClick={() => void copy()}>{copyStatus || "Copy code"}</Button><span className="command-ai-announcement" role="status">{copyStatus}</span></div>
     <pre tabIndex={0} aria-label={(language ?? "Plain text") + " code"}>{highlighted
       ? <code className="hljs" dangerouslySetInnerHTML={{ __html: highlighted.value }} />
       : <code>{code}</code>}</pre>

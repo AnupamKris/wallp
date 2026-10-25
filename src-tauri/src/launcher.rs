@@ -29,6 +29,8 @@ static READY: AtomicBool = AtomicBool::new(false);
 static CAPTURE: AtomicBool = AtomicBool::new(true);
 static HOTKEY_THREAD: AtomicU32 = AtomicU32::new(0);
 static CTRL_SPACE: AtomicBool = AtomicBool::new(true);
+static SHADCN_COMMAND: AtomicBool = AtomicBool::new(false);
+static EXPANDED: AtomicBool = AtomicBool::new(false);
 static OPEN: OnceLock<mpsc::Sender<&'static str>> = OnceLock::new();
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -43,12 +45,14 @@ pub struct InstalledApp {
 pub struct Preferences {
     ctrl_space: bool,
     clipboard: bool,
+    shadcn_command: bool,
 }
 impl Default for Preferences {
     fn default() -> Self {
         Self {
             ctrl_space: true,
             clipboard: true,
+            shadcn_command: false,
         }
     }
 }
@@ -81,6 +85,7 @@ pub fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
             if let Ok(prefs) = serde_json::from_slice::<Preferences>(&bytes) {
                 CTRL_SPACE.store(prefs.ctrl_space, Ordering::Relaxed);
                 CAPTURE.store(prefs.clipboard, Ordering::Relaxed);
+                SHADCN_COMMAND.store(prefs.shadcn_command, Ordering::Relaxed);
             }
         }
     }
@@ -105,6 +110,13 @@ pub fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     .build()?;
     let handle = app.clone();
     window.on_window_event(move |event| {
+        // Keep the webview and its pending AI turn alive on Alt+F4/native close.
+        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            api.prevent_close();
+            if let Some(window) = handle.get_webview_window(LABEL) {
+                let _ = window.hide();
+            }
+        }
         if matches!(event, tauri::WindowEvent::Destroyed) {
             READY.store(false, Ordering::Relaxed);
         }
@@ -223,20 +235,21 @@ fn populate_icons(apps: &mut [InstalledApp]) {
             return;
         }
         for app in apps {
-            app.icon = installed_icon(&app.id);
+            app.icon = shell_icon(&format!("shell:AppsFolder\\{}", app.id), 32);
         }
         CoUninitialize();
     }
 }
 
-fn installed_icon(id: &str) -> Option<String> {
+/// Render the shell icon for a parsing name (an AppsFolder ID or a file path) as a PNG data URL.
+pub(crate) fn shell_icon(parsing_name: &str, size: i32) -> Option<String> {
     use base64::Engine;
     use windows::{
         Win32::{Foundation::SIZE, Graphics::Gdi::*, UI::Shell::*},
         core::PCWSTR,
     };
     unsafe {
-        let path: Vec<u16> = format!("shell:AppsFolder\\{id}")
+        let path: Vec<u16> = parsing_name
             .encode_utf16()
             .chain(Some(0))
             .collect();
@@ -244,7 +257,7 @@ fn installed_icon(id: &str) -> Option<String> {
             SHCreateItemFromParsingName(PCWSTR(path.as_ptr()), None).ok()?;
         let bitmap = factory
             .GetImage(
-                SIZE { cx: 32, cy: 32 },
+                SIZE { cx: size, cy: size },
                 SIIGBF_ICONONLY | SIIGBF_BIGGERSIZEOK,
             )
             .ok()?;
@@ -353,29 +366,51 @@ fn show(app: &AppHandle, mode: &str) -> Result<(), String> {
         *app.state::<Launcher>().target.lock().unwrap() = (foreground.0 as usize, pid);
     }
     *app.state::<Launcher>().mode.lock().unwrap() = mode.to_owned();
-    // Center on the current monitor, with space for the whole menu on small displays.
-    if let Ok(Some(monitor)) = window.current_monitor() {
-        let scale = monitor.scale_factor();
-        let size = monitor.size();
-        let width = 720f64.min(size.width as f64 / scale - 32.).max(320.);
-        let height = 510f64.min(size.height as f64 / scale - 64.).max(240.);
-        let _ = window.set_size(tauri::LogicalSize::new(width, height));
-    }
-    let _ = window.center();
+    let _ = size_launcher(&window, EXPANDED.load(Ordering::Relaxed));
     window.show().map_err(|e| e.to_string())?;
     window.set_focus().map_err(|e| e.to_string())?;
     window
         .emit("launcher://open", mode)
         .map_err(|e| e.to_string())
 }
+
+fn size_launcher(window: &tauri::WebviewWindow, expanded: bool) -> Result<(), String> {
+    let monitor = window
+        .current_monitor()
+        .map_err(|e| e.to_string())?
+        .ok_or("Could not determine the command menu's monitor.")?;
+    let scale = monitor.scale_factor();
+    let size = monitor.size();
+    let (width, height) = if expanded {
+        (1120f64, 860f64)
+    } else {
+        (720f64, 510f64)
+    };
+    let width = width.min((size.width as f64 / scale - 32.).max(320.));
+    let height = height.min((size.height as f64 / scale - 80.).max(240.));
+    window
+        .set_size(tauri::LogicalSize::new(width, height))
+        .map_err(|e| e.to_string())?;
+    window.center().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn launcher_set_expanded(app: AppHandle, expanded: bool) -> Result<bool, String> {
+    let window = app
+        .get_webview_window(LABEL)
+        .ok_or("Command menu unavailable")?;
+    size_launcher(&window, expanded)?;
+    EXPANDED.store(expanded, Ordering::Relaxed);
+    Ok(expanded)
+}
 #[tauri::command]
 pub fn open_launcher(app: AppHandle, mode: Option<String>) -> Result<(), String> {
     show(
         &app,
-        if mode.as_deref() == Some("clipboard") {
-            "clipboard"
-        } else {
-            "apps"
+        match mode.as_deref() {
+            Some("clipboard") => "clipboard",
+            Some("capture") => "capture",
+            _ => "apps",
         },
     )
 }
@@ -447,6 +482,7 @@ pub fn launcher_search(app: AppHandle, engine: String, query: String) -> Result<
 pub struct PreferenceStatus {
     ctrl_space: bool,
     clipboard: bool,
+    shadcn_command: bool,
     shortcut_error: Option<String>,
 }
 #[tauri::command]
@@ -454,6 +490,7 @@ pub fn launcher_preferences(app: AppHandle) -> PreferenceStatus {
     PreferenceStatus {
         ctrl_space: CTRL_SPACE.load(Ordering::Relaxed),
         clipboard: CAPTURE.load(Ordering::Relaxed),
+        shadcn_command: SHADCN_COMMAND.load(Ordering::Relaxed),
         shortcut_error: app
             .state::<Launcher>()
             .shortcut_error
@@ -477,6 +514,7 @@ pub fn set_launcher_preferences(app: AppHandle, preferences: Preferences) -> Res
         }
     }
     CAPTURE.store(preferences.clipboard, Ordering::Relaxed);
+    SHADCN_COMMAND.store(preferences.shadcn_command, Ordering::Relaxed);
     let _ = app.emit("launcher://preferences", launcher_preferences(app.clone()));
     Ok(())
 }
@@ -550,7 +588,21 @@ fn spawn_hotkey(app: AppHandle) {
                     false
                 }
             };
+        let capture_registered =
+            match RegisterHotKey(None, 4, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, b'N' as u32) {
+                Ok(()) => true,
+                Err(error) => {
+                    eprintln!("wallp: Ctrl+Alt+N is unavailable (another app may use it): {error}");
+                    false
+                }
+            };
         while GetMessageW(&mut msg, None, 0, 0).0 > 0 {
+            if msg.message == WM_HOTKEY && msg.wParam.0 == 4 {
+                if READY.load(Ordering::Relaxed) {
+                    request_open("capture");
+                }
+                continue;
+            }
             if msg.message == WM_HOTKEY && matches!(msg.wParam.0, 2 | 3) {
                 let workspace = msg.wParam.0 == 2;
                 let handle = app.clone();
@@ -576,6 +628,9 @@ fn spawn_hotkey(app: AppHandle) {
             DispatchMessageW(&msg);
         }
         HOTKEY_THREAD.store(0, Ordering::Relaxed);
+        if capture_registered {
+            let _ = UnregisterHotKey(None, 4);
+        }
         if desktop_registered {
             let _ = UnregisterHotKey(None, 3);
         }
@@ -760,9 +815,22 @@ mod tests {
             serde_json::from_str(r#"{"replaceStart":true,"clipboard":false}"#).unwrap();
         assert!(preferences.ctrl_space);
         assert!(!preferences.clipboard);
+        assert!(!preferences.shadcn_command);
         let saved = serde_json::to_value(preferences).unwrap();
         assert_eq!(saved["ctrlSpace"], true);
+        assert_eq!(saved["shadcnCommand"], false);
         assert!(saved.get("replaceStart").is_none());
+    }
+
+    #[test]
+    fn command_menu_preference_survives_round_trip() {
+        let preferences: Preferences =
+            serde_json::from_str(r#"{"ctrlSpace":true,"clipboard":false,"shadcnCommand":true}"#)
+                .unwrap();
+        let restored: Preferences =
+            serde_json::from_slice(&serde_json::to_vec(&preferences).unwrap()).unwrap();
+        assert!(restored.shadcn_command);
+        assert!(!restored.clipboard);
     }
 
     #[test]
@@ -997,4 +1065,74 @@ pub async fn paste_clipboard(app: AppHandle, id: i64) -> Result<(), String> {
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn pin_clipboard(app: AppHandle, id: i64, key: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<Launcher>();
+        let history = state.history.lock().unwrap();
+        history.as_ref().ok_or("History unavailable")?.pin(id, &key)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn remove_clipboard_pin(app: AppHandle, key: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<Launcher>();
+        let history = state.history.lock().unwrap();
+        history.as_ref().ok_or("History unavailable")?.unpin(&key)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+async fn copy_history_content(
+    app: AppHandle,
+    id: Option<i64>,
+    key: Option<String>,
+) -> Result<(), String> {
+    let owner = app
+        .get_webview_window(LABEL)
+        .ok_or("Command menu unavailable")?
+        .hwnd()
+        .map_err(|e| e.to_string())?
+        .0 as isize;
+    tauri::async_runtime::spawn_blocking(move || {
+        let content = {
+            let state = app.state::<Launcher>();
+            let history = state.history.lock().unwrap();
+            let history = history.as_ref().ok_or("History unavailable")?;
+            if let Some(key) = key {
+                history.get_pin(&key)?
+            } else {
+                history.get(id.ok_or("Missing clipboard ID")?)?
+            }
+        };
+        let formats = match content {
+            Content::Text(text) => vec![(
+                13,
+                text.encode_utf16()
+                    .chain(Some(0))
+                    .flat_map(u16::to_le_bytes)
+                    .collect(),
+            )],
+            Content::Image(image) => clipboard_image_formats(image)?,
+        };
+        unsafe { write_clipboard_formats(HWND(owner as *mut _), &formats) }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn copy_clipboard_entry(app: AppHandle, id: i64) -> Result<(), String> {
+    copy_history_content(app, Some(id), None).await
+}
+
+#[tauri::command]
+pub async fn copy_clipboard_pin(app: AppHandle, key: String) -> Result<(), String> {
+    copy_history_content(app, None, Some(key)).await
 }
