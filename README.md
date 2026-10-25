@@ -11,8 +11,9 @@ pnpm tauri dev      # or: pnpm tauri build
 
 It runs from the tray icon: **Show desktop icons**, **Reload**, **Quit**.
 
-It also runs on GNOME (tested on Zorin OS 18, GNOME 46, Wayland). See
-[Linux (GNOME)](#linux-gnome).
+It also runs on GNOME (tested on Zorin OS 18, GNOME 46, Wayland) and XFCE
+(tested on Debian 13, XFCE 4.20, X11). See [Linux (GNOME)](#linux-gnome) and
+[Linux (XFCE)](#linux-xfce).
 
 ## Desktop layout
 
@@ -31,6 +32,21 @@ It also runs on GNOME (tested on Zorin OS 18, GNOME 46, Wayland). See
   clicking outside closes it. Multiple icons from one process share one card. Windows
   shell icons and wallp cannot be ended from this panel. Windows may deny access
   to elevated or protected apps; errors appear in the panel.
+- Beside System tray, **Quick settings** opens Wi-Fi and Bluetooth switches,
+  volume/mute, and display brightness. **Manage networks** and **Pair devices**
+  open the system's settings for network selection, passwords, and pairing.
+  Sound, Display, and Power shortcuts open their native settings too. Device
+  status refreshes every ten seconds while the panel is open; unavailable
+  hardware or services disable only the affected control. Escape, the close
+  button, or clicking outside closes the panel.
+  Windows uses native radio and default audio endpoint APIs, plus WMI for
+  supported display backlights. Linux uses NetworkManager (`nmcli`), BlueZ
+  (`bluetoothctl`), WirePlumber (`wpctl`, with a `pactl` fallback), and optional
+  `brightnessctl` for display backlights. GNOME/Zorin shortcuts use
+  `gnome-control-center`; XFCE uses `nm-connection-editor`, `blueman-manager`,
+  `pavucontrol`, `xfce4-display-settings`, and `xfce4-power-manager-settings`.
+  Missing utilities and permission errors appear in the panel. External
+  monitors without a supported backlight API can use Display settings.
 - Bottom: a **T3 Code** dock, using the installed Nightly version when available.
 - Center: a custom analog and digital clock with seconds, date, and local timezone.
 
@@ -260,3 +276,33 @@ the next start and quit restores them (both are journaled in
 `~/.local/share/com.anupa.wallp/`), or run `gnome-extensions enable
 zorin-desktop-icons@zorinos.com`. `tauri dev` restarts kill the app, and the
 new copy can exit early while the old one is still cleaning up; run it again.
+
+
+## Linux (XFCE)
+
+XFCE runs on X11, so wallp sees and manages every window there; it detects
+XFCE from `XDG_CURRENT_DESKTOP`. Same build dependencies as GNOME.
+
+- **Desktop layer:** xfdesktop draws the wallpaper and icons in an opaque
+  desktop window. xfwm4 ignores restack requests from desktop windows but puts
+  a newly mapped one on top, so wallp re-maps itself in front of xfdesktop
+  (the watchdog repeats this if xfdesktop restarts). **Show desktop icons**
+  withdraws wallp so xfdesktop shows through.
+- **Shortcuts:** Ctrl+Space, Ctrl+Alt+W and Ctrl+Alt+D are grabbed on the X
+  root window, like Windows' `RegisterHotKey`. Ctrl+Alt+D is taken from
+  xfwm4's Show Desktop (`xfce4-keyboard-shortcuts`) while wallp runs.
+- **Dock:** works as on Windows: it pops up at the bottom edge, lists windows
+  with their own icons (`_NET_WM_ICON`, else the app's icon), and focuses or
+  restores them. Bottom panels would pop up at the same edge, so while the
+  dock is on they're pointed at a monitor that doesn't exist, which hides
+  them. **Restore XFCE panel** (tray menu or settings) turns the dock off and
+  restarts the panel to bring them back. A recovery process does the same if
+  wallp is killed.
+- **Fullscreen pause:** works; the dock stays hidden and animations pause
+  while a fullscreen window has focus.
+- **Tray apps:** need a Status Tray plugin in the panel. XFCE's own processes
+  can't be ended from wallp.
+
+Quitting, logging out and SIGTERM/SIGINT/SIGHUP give back the panels and
+Ctrl+Alt+D. Both are journaled in `~/.local/share/com.anupa.wallp/`, and the
+next start and quit restores them after a crash.

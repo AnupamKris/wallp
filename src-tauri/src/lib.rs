@@ -1,5 +1,7 @@
 #[cfg(not(any(windows, target_os = "linux")))]
-compile_error!("wallp embeds itself in the Windows or GNOME desktop and only builds for those.");
+compile_error!(
+    "wallp embeds itself in the Windows, GNOME or XFCE desktop and only builds for those."
+);
 
 mod agnes;
 mod ai_history;
@@ -14,6 +16,7 @@ mod launcher;
 mod linux;
 mod mail_cache;
 mod power;
+mod quick_settings;
 #[cfg_attr(target_os = "linux", path = "linux/taskbar.rs")]
 mod taskbar;
 #[cfg_attr(target_os = "linux", path = "linux/tray_apps.rs")]
@@ -262,22 +265,24 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let reload = MenuItem::with_id(app, "reload", "Reload", true, None::<&str>)?;
     let commands = MenuItem::with_id(app, "commands", "Open command menu", true, None::<&str>)?;
     #[cfg(windows)]
-    let restore_taskbar = MenuItem::with_id(
-        app,
-        "restore-taskbar",
-        "Restore Windows taskbar",
-        true,
-        None::<&str>,
-    )?;
+    let restore_label = Some("Restore Windows taskbar");
+    // GNOME keeps its own panel, so there is no taskbar to restore there.
+    #[cfg(target_os = "linux")]
+    let restore_label = linux::is_xfce().then_some("Restore XFCE panel");
+    let restore_taskbar = restore_label
+        .map(|label| MenuItem::with_id(app, "restore-taskbar", label, true, None::<&str>))
+        .transpose()?;
     let quit = MenuItem::with_id(app, "quit", "Quit wallp", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
-    // GNOME keeps its own panel, so there is no taskbar to restore there.
-    #[cfg(windows)]
-    let items: [&dyn tauri::menu::IsMenuItem<_>; 6] =
-        [&show_icons, &commands, &restore_taskbar, &reload, &separator, &quit];
-    #[cfg(target_os = "linux")]
-    let items: [&dyn tauri::menu::IsMenuItem<_>; 5] =
-        [&show_icons, &commands, &reload, &separator, &quit];
+    let mut items: Vec<&dyn tauri::menu::IsMenuItem<_>> = vec![&show_icons, &commands];
+    if let Some(item) = &restore_taskbar {
+        items.push(item);
+    }
+    items.extend([
+        &reload as &dyn tauri::menu::IsMenuItem<_>,
+        &separator,
+        &quit,
+    ]);
     let menu = Menu::with_items(app, &items)?;
 
     TrayIconBuilder::with_id("wallp")
@@ -314,6 +319,7 @@ pub fn run() {
     tauri::Builder::default()
         // A second copy would fight the first over the desktop.
         // GNOME shortcuts reach the running copy as arguments of a second one.
+        // (XFCE's are grabbed directly; see linux/hotkeys.rs.)
         .plugin(tauri_plugin_single_instance::init(|_app, _args, _| {
             #[cfg(target_os = "linux")]
             launcher::handle_shortcut_args(_app, &_args);
@@ -332,6 +338,12 @@ pub fn run() {
             launch_shortcut,
             tray_apps::list_tray_apps,
             tray_apps::end_tray_app,
+            quick_settings::quick_settings_status,
+            quick_settings::set_quick_setting,
+            quick_settings::open_system_settings,
+            quick_settings::bluetooth_devices,
+            quick_settings::bluetooth_device,
+            taskbar::taskbar_supported,
             taskbar::taskbar_enabled,
             taskbar::set_taskbar_enabled,
             taskbar::taskbar_ready,

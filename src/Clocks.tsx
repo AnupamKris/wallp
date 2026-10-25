@@ -3,8 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Slider } from "@/components/ui/slider";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
-import { TaskbarControl } from "./Taskbar";
-import { isLinux } from "./platform";
+import { DesktopSettings } from "./Taskbar";
 import { LauncherSettings } from "./Launcher";
 import { startClockSweep } from "./clock-motion";
 import { ThemeSettings, type Theme } from "./Theme";
@@ -204,7 +203,7 @@ export function WorldClocks({ now, settings, active = true, fit = false }: { now
 export function ClockSettings({ settings, onChange, theme, onThemeChange, onClose, now }: { settings: Settings; onChange: (settings: Settings) => void; theme: Theme; onThemeChange: (theme: Theme) => void; onClose: () => void; now: Date }) {
   const update = (patch: Partial<Settings>) => onChange({ ...settings, ...patch });
   return <Dialog open onOpenChange={open => { if (!open) onClose(); }}>
-    <DialogContent className="settings-dialog">
+    <DialogContent layout="viewport" className="settings-dialog">
       <header className="settings-header"><span className="settings-eyebrow">PERSONALIZE / 01</span><DialogTitle className="text-2xl font-normal tracking-tight">Settings</DialogTitle><DialogDescription>Personalize your clocks and desktop.</DialogDescription></header>
       <div className="settings-body">
       <div className="settings-gallery">
@@ -231,7 +230,7 @@ export function ClockSettings({ settings, onChange, theme, onThemeChange, onClos
         ["seconds", "Seconds", ""],
         ["labels", "City labels", ""],
       ] as const).map(([key, label, hint]) => <div key={key} className="setting-row toggle-row"><label htmlFor={`setting-${key}`}>{label}{hint && <small>{hint}</small>}</label><Switch id={`setting-${key}`} checked={settings[key]} onCheckedChange={checked => update({ [key]: checked })} /></div>)}
-      {!isLinux && <div className="desktop-settings"><h3>Desktop</h3><TaskbarControl /></div>}
+      <DesktopSettings />
       <LauncherSettings />
       </section>
       </div>

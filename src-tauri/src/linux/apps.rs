@@ -54,12 +54,30 @@ pub fn icon_named(name: &str, extra_dir: Option<&Path>) -> Option<String> {
     icon_index(false).named(name)
 }
 
+/// An icon for a window that doesn't supply its own, from the app whose
+/// desktop entry matches its `WM_CLASS`, or a themed icon of that name.
+pub fn icon_for_class(instance: &str, class: &str) -> Option<String> {
+    let names: Vec<String> = [instance, class]
+        .into_iter()
+        .filter(|n| !n.is_empty())
+        .flat_map(|n| [n.to_string(), n.to_lowercase()])
+        .collect();
+    let index = icon_index(false);
+    names
+        .iter()
+        .filter_map(|n| gio::DesktopAppInfo::new(&format!("{n}.desktop")))
+        .find_map(|info| index.data_url(&info.icon()?))
+        .or_else(|| names.iter().find_map(|n| index.named(n)))
+}
+
 /// Tray icons are looked up every refresh, so reuse a recent theme scan.
 fn icon_index(fresh: bool) -> Arc<IconIndex> {
     static CACHE: Mutex<Option<(Instant, Arc<IconIndex>)>> = Mutex::new(None);
     let mut cache = CACHE.lock().unwrap();
     match &*cache {
-        Some((built, index)) if !fresh && built.elapsed() < Duration::from_secs(300) => index.clone(),
+        Some((built, index)) if !fresh && built.elapsed() < Duration::from_secs(300) => {
+            index.clone()
+        }
         _ => {
             let index = Arc::new(IconIndex::build());
             *cache = Some((Instant::now(), index.clone()));
@@ -104,7 +122,9 @@ struct IconIndex(HashMap<String, Vec<(usize, u32, PathBuf)>>);
 
 impl IconIndex {
     fn build() -> Self {
-        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_default();
         let mut bases = vec![home.join(".icons")];
         bases.extend(super::data_dirs().into_iter().map(|d| d.join("icons")));
         let themes = theme_chain(&bases);
@@ -113,16 +133,25 @@ impl IconIndex {
             for base in &bases {
                 walk(&base.join(theme), 0, &mut |path| {
                     if let Some((name, score)) = candidate(path) {
-                        index.entry(name).or_default().push((rank, score, path.to_path_buf()));
+                        index
+                            .entry(name)
+                            .or_default()
+                            .push((rank, score, path.to_path_buf()));
                     }
                 });
             }
         }
-        for dir in [PathBuf::from("/usr/share/pixmaps")].into_iter().chain(bases) {
+        for dir in [PathBuf::from("/usr/share/pixmaps")]
+            .into_iter()
+            .chain(bases)
+        {
             if let Ok(entries) = std::fs::read_dir(dir) {
                 for path in entries.flatten().map(|e| e.path()) {
                     if let Some((name, score)) = candidate(&path) {
-                        index.entry(name).or_default().push((themes.len(), score, path));
+                        index
+                            .entry(name)
+                            .or_default()
+                            .push((themes.len(), score, path));
                     }
                 }
             }
@@ -134,7 +163,10 @@ impl IconIndex {
     }
 
     fn named(&self, name: &str) -> Option<String> {
-        self.0.get(name)?.iter().find_map(|(_, _, path)| encode(path))
+        self.0
+            .get(name)?
+            .iter()
+            .find_map(|(_, _, path)| encode(path))
     }
 
     fn data_url(&self, icon: &gio::Icon) -> Option<String> {
@@ -197,11 +229,22 @@ fn walk(dir: &Path, depth: u8, visit: &mut impl FnMut(&Path)) {
     }
 }
 
-/// The current GNOME icon theme, the themes it inherits, then hicolor.
+/// The current icon theme, the themes it inherits, then hicolor.
 fn theme_chain(bases: &[PathBuf]) -> Vec<String> {
-    let current = super::command_output("gsettings", &["get", "org.gnome.desktop.interface", "icon-theme"])
+    let current = if super::is_xfce() {
+        super::xfce::icon_theme()
+    } else {
+        None
+    }
+    .or_else(|| {
+        super::command_output(
+            "gsettings",
+            &["get", "org.gnome.desktop.interface", "icon-theme"],
+        )
+        .ok()
         .map(|v| v.trim_matches('\'').to_string())
-        .unwrap_or_else(|_| "Adwaita".into());
+    })
+    .unwrap_or_else(|| "Adwaita".into());
     let mut chain = Vec::new();
     let mut queue = vec![current];
     while let Some(theme) = queue.pop() {
@@ -218,7 +261,14 @@ fn theme_chain(bases: &[PathBuf]) -> Vec<String> {
             })
             .unwrap_or_default();
         chain.push(theme);
-        queue.extend(inherits.split(',').rev().map(str::trim).filter(|t| !t.is_empty()).map(String::from));
+        queue.extend(
+            inherits
+                .split(',')
+                .rev()
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+                .map(String::from),
+        );
     }
     chain.retain(|t| t != "hicolor");
     chain.push("hicolor".into());
@@ -244,7 +294,13 @@ mod tests {
     fn installed_apps_have_ids_names_and_some_icons() {
         let apps = installed();
         assert!(!apps.is_empty(), "GNOME should list .desktop apps");
-        assert!(apps.iter().all(|a| a.id.ends_with(".desktop") && !a.name.is_empty()));
-        assert!(apps.iter().any(|a| a.icon.is_some()), "some apps should resolve icons");
+        assert!(
+            apps.iter()
+                .all(|a| a.id.ends_with(".desktop") && !a.name.is_empty())
+        );
+        assert!(
+            apps.iter().any(|a| a.icon.is_some()),
+            "some apps should resolve icons"
+        );
     }
 }

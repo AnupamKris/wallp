@@ -4,8 +4,17 @@ import { listen } from "@tauri-apps/api/event";
 import { DesktopIcon, SquaresFourIcon, AppWindowIcon, MagnifyingGlassIcon } from "@phosphor-icons/react";
 
 import { reconcileWindows } from "./dock-windows";
+import { isLinux } from "./platform";
 
 type AppWindow = { id: string; pid: number; title: string; active: boolean; minimized: boolean; icon: string | null };
+/** The dock runs on Windows and XFCE; GNOME keeps its own. */
+export function DesktopSettings() {
+  const [supported, setSupported] = useState(!isLinux);
+  useEffect(() => {
+    if (isLinux && isTauri()) void invoke<boolean>("taskbar_supported").then(setSupported).catch(() => setSupported(false));
+  }, []);
+  return supported ? <div className="desktop-settings"><h3>Desktop</h3><TaskbarControl /></div> : null;
+}
 export function TaskbarControl() {
   const [enabled, setEnabled] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -24,7 +33,7 @@ export function TaskbarControl() {
       try { const value = await invoke<boolean>("set_taskbar_enabled", { enabled: !enabled }); if (!value) setEnabled(false); }
       catch (err) { setError(String(err)); }
       finally { setBusy(false); }
-    }}><DesktopIcon size={16} />{busy ? "Updating dock…" : enabled ? "Restore Windows taskbar" : "Use wallp dock"}</button>
+    }}><DesktopIcon size={16} />{busy ? "Updating dock…" : enabled ? (isLinux ? "Restore XFCE panel" : "Restore Windows taskbar") : "Use wallp dock"}</button>
     {error && <p role="alert">{error}</p>}
   </div>;
 }

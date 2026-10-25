@@ -85,6 +85,10 @@ pub fn resize_dock(app: AppHandle, window: tauri::WebviewWindow, width: i32) -> 
 }
 
 #[tauri::command]
+pub fn taskbar_supported() -> bool {
+    true
+}
+#[tauri::command]
 pub fn taskbar_enabled(app: AppHandle) -> bool {
     app.state::<Taskbar>().0.lock().unwrap().enabled
 }

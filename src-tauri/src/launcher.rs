@@ -526,7 +526,7 @@ pub fn set_launcher_preferences(app: AppHandle, preferences: Preferences) -> Res
         }
     }
     #[cfg(target_os = "linux")]
-    install_shortcuts(&app);
+    spawn_hotkey(app.clone());
     CAPTURE.store(preferences.clipboard, Ordering::Relaxed);
     let _ = app.emit("launcher://preferences", launcher_preferences(app.clone()));
     Ok(())
@@ -644,31 +644,49 @@ fn spawn_hotkey(app: AppHandle) {
 
 #[cfg(target_os = "linux")]
 fn spawn_hotkey(app: AppHandle) {
-    // gsettings round-trips are slow; keep them off the main thread.
+    // gsettings and xfconf round-trips are slow; keep them off the main thread.
     thread::spawn(move || install_shortcuts(&app));
 }
 
-/// Registers GNOME shortcuts that launch `wallp --launcher` and friends.
+/// Registers wallp's shortcuts: GNOME custom shortcuts that launch
+/// `wallp --launcher` and friends, or on XFCE, keys grabbed directly.
 #[cfg(target_os = "linux")]
 fn install_shortcuts(app: &AppHandle) {
+    let ctrl_space = CTRL_SPACE.load(Ordering::Relaxed);
     let error = app
         .path()
         .app_local_data_dir()
         .map_err(|e| e.to_string())
         .and_then(|dir| {
-            crate::linux::keybindings::install(&dir, CTRL_SPACE.load(Ordering::Relaxed))
+            if !crate::linux::is_xfce() {
+                return crate::linux::keybindings::install(&dir, ctrl_space)
+                    .map_err(|error| format!("Couldn't register GNOME shortcuts: {error}"));
+            }
+            // xfwm4 must let go of Ctrl+Alt+D before wallp can grab it.
+            let released = crate::linux::xfce::release_show_desktop(&dir);
+            let handle = app.clone();
+            let grabbed = crate::linux::hotkeys::install(ctrl_space, move |flag| {
+                handle_shortcut(&handle, flag)
+            });
+            released
+                .map_err(|error| format!("Couldn't free Ctrl+Alt+D from Xfwm: {error}"))
+                .and(grabbed)
         })
-        .err()
-        .map(|error| format!("Couldn't register GNOME shortcuts: {error}"));
+        .err();
     *app.state::<Launcher>().shortcut_error.lock().unwrap() = error;
     let _ = app.emit("launcher://preferences", launcher_preferences(app.clone()));
 }
 
 /// Removes the GNOME shortcuts and gives Ctrl+Alt+D back to Show Desktop.
+/// XFCE's grabs end with the process.
 #[cfg(target_os = "linux")]
 pub fn release_shortcuts(app: &AppHandle) {
     if let Ok(dir) = app.path().app_local_data_dir() {
-        crate::linux::keybindings::remove(&dir);
+        if crate::linux::is_xfce() {
+            crate::linux::xfce::restore_show_desktop(&dir);
+        } else {
+            crate::linux::keybindings::remove(&dir);
+        }
     }
 }
 
@@ -676,14 +694,24 @@ pub fn release_shortcuts(app: &AppHandle) {
 #[cfg(target_os = "linux")]
 pub fn handle_shortcut_args(app: &AppHandle, args: &[String]) {
     use crate::linux::keybindings::{DESKTOP, LAUNCHER, WORKSPACE};
-    let flag = args.iter().skip(1).find_map(|arg| {
-        [LAUNCHER, WORKSPACE, DESKTOP].into_iter().find(|f| f == arg)
-    });
+    if let Some(flag) = args.iter().skip(1).find_map(|arg| {
+        [LAUNCHER, WORKSPACE, DESKTOP]
+            .into_iter()
+            .find(|f| f == arg)
+    }) {
+        handle_shortcut(app, flag);
+    }
+}
+
+/// Runs a shortcut, named by its command-line flag.
+#[cfg(target_os = "linux")]
+fn handle_shortcut(app: &AppHandle, flag: &str) {
+    use crate::linux::keybindings::{DESKTOP, LAUNCHER, WORKSPACE};
     match flag {
-        Some(LAUNCHER) if CTRL_SPACE.load(Ordering::Relaxed) && READY.load(Ordering::Relaxed) => {
+        LAUNCHER if CTRL_SPACE.load(Ordering::Relaxed) && READY.load(Ordering::Relaxed) => {
             request_open("apps")
         }
-        Some(flag @ (WORKSPACE | DESKTOP)) => {
+        WORKSPACE | DESKTOP => {
             let workspace = flag == WORKSPACE;
             let handle = app.clone();
             let _ = app.run_on_main_thread(move || {
@@ -726,7 +754,10 @@ fn spawn_clipboard(app: AppHandle) {
         let watcher = match Watcher::new() {
             Ok(watcher) => watcher,
             Err(error) => {
-                let _ = app.emit("launcher://error", format!("Clipboard history is unavailable: {error}"));
+                let _ = app.emit(
+                    "launcher://error",
+                    format!("Clipboard history is unavailable: {error}"),
+                );
                 return;
             }
         };
@@ -742,16 +773,22 @@ fn spawn_clipboard(app: AppHandle) {
                 continue;
             }
             let content = match kind {
-                Some(Kind::Text) => with(|c| c.get_text()).ok().filter(|text| {
-                    !text.trim().is_empty() && text.encode_utf16().count() <= TEXT_LIMIT
-                }).map(Content::Text),
-                Some(Kind::Image) => with(|c| c.get_image()).ok().and_then(|image| {
-                    image::RgbaImage::from_raw(
-                        u32::try_from(image.width).ok()?,
-                        u32::try_from(image.height).ok()?,
-                        image.bytes.into_owned(),
-                    )
-                }).map(Content::Image),
+                Some(Kind::Text) => with(|c| c.get_text())
+                    .ok()
+                    .filter(|text| {
+                        !text.trim().is_empty() && text.encode_utf16().count() <= TEXT_LIMIT
+                    })
+                    .map(Content::Text),
+                Some(Kind::Image) => with(|c| c.get_image())
+                    .ok()
+                    .and_then(|image| {
+                        image::RgbaImage::from_raw(
+                            u32::try_from(image.width).ok()?,
+                            u32::try_from(image.height).ok()?,
+                            image.bytes.into_owned(),
+                        )
+                    })
+                    .map(Content::Image),
                 None => None,
             };
             if let Some(content) = content {

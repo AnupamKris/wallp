@@ -22,9 +22,24 @@ struct Binding {
     arg: &'static str,
 }
 const BINDINGS: [Binding; 3] = [
-    Binding { key: "wallp-launcher", name: "wallp command menu", accel: "<Control>space", arg: LAUNCHER },
-    Binding { key: "wallp-workspace", name: "wallp workspace", accel: "<Control><Alt>w", arg: WORKSPACE },
-    Binding { key: "wallp-desktop", name: "wallp desktop", accel: "<Control><Alt>d", arg: DESKTOP },
+    Binding {
+        key: "wallp-launcher",
+        name: "wallp command menu",
+        accel: "<Control>space",
+        arg: LAUNCHER,
+    },
+    Binding {
+        key: "wallp-workspace",
+        name: "wallp workspace",
+        accel: "<Control><Alt>w",
+        arg: WORKSPACE,
+    },
+    Binding {
+        key: "wallp-desktop",
+        name: "wallp desktop",
+        accel: "<Control><Alt>d",
+        arg: DESKTOP,
+    },
 ];
 
 fn path(binding: &Binding) -> String {
@@ -60,10 +75,17 @@ fn quote(value: &str) -> String {
     format!("'{}'", value.replace('\\', "\\\\").replace('\'', "\\'"))
 }
 fn format_list(items: &[String]) -> String {
-    format!("[{}]", items.iter().map(|i| quote(i)).collect::<Vec<_>>().join(", "))
+    format!(
+        "[{}]",
+        items
+            .iter()
+            .map(|i| quote(i))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
 }
 
-fn is_ctrl_alt_d(accel: &str) -> bool {
+pub(super) fn is_ctrl_alt_d(accel: &str) -> bool {
     let accel = accel.to_ascii_lowercase().replace("<primary>", "<control>");
     accel == "<control><alt>d"
 }
@@ -83,7 +105,12 @@ pub fn install(data_dir: &Path, ctrl_space: bool) -> Result<(), String> {
         }
         let schema = format!("{MEDIA_KEYS}.custom-keybinding:{path}");
         gsettings(&["set", &schema, "name", &quote(binding.name)])?;
-        gsettings(&["set", &schema, "command", &quote(&format!("{exe} {}", binding.arg))])?;
+        gsettings(&[
+            "set",
+            &schema,
+            "command",
+            &quote(&format!("{exe} {}", binding.arg)),
+        ])?;
         gsettings(&["set", &schema, "binding", &quote(binding.accel)])?;
         list.push(path);
     }

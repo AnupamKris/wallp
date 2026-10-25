@@ -9,6 +9,7 @@ import { useHomeShortcuts } from "./home-shortcuts";
 import { isLinux } from "./platform";
 import { Workspace } from "./Workspace";
 import { TrayApps } from "./TrayApps";
+import { QuickSettings } from "./QuickSettings";
 import { startClockTicker } from "./clock-motion";
 import { useTheme } from "./Theme";
 import { EmailDigest } from "./EmailDigest";
@@ -123,7 +124,10 @@ function App() {
         <WorldClocks now={now} settings={settings} active={clockActive && !workspace && !settingsOpen} fit />
         <EmailDigest active={!paused && !hidden} />
       </div>
-      <TrayApps active={!workspace && !paused} />
+      <nav className="system-controls" aria-label="System controls">
+        <QuickSettings active={!workspace && !paused} />
+        <TrayApps active={!workspace && !paused} />
+      </nav>
       <nav className="rail applications" aria-label="Applications">
         {shortcuts.map(({ id, label }) => shortcut(id, label))}
         {pins.map(app => <div className="home-app" key={app.id}>

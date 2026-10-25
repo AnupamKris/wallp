@@ -6,8 +6,21 @@ use serde::Serialize;
 use std::{path::Path, time::Duration};
 
 const TIMEOUT: Duration = Duration::from_millis(800);
-/// GNOME's own processes; ending them would end the session or its services.
-const SHELL: [&str; 4] = ["gnome-shell", "gnome-session-binary", "gnome-session", "systemd"];
+/// The desktop's own processes; ending them would end the session, its
+/// services or its panel. `wrapper-2.0` hosts XFCE panel plugins.
+const SHELL: [&str; 11] = [
+    "gnome-shell",
+    "gnome-session-binary",
+    "gnome-session",
+    "systemd",
+    "xfce4-session",
+    "xfwm4",
+    "xfce4-panel",
+    "xfdesktop",
+    "xfsettingsd",
+    "xfconfd",
+    "wrapper-2.0",
+];
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -27,7 +40,10 @@ type Pixmaps = Vec<(i32, i32, Vec<u8>)>;
 /// name using the default object path.
 fn split_item(item: &str) -> (String, String) {
     match item.find('/') {
-        Some(i) => (item[..i].trim_end_matches('@').to_string(), item[i..].to_string()),
+        Some(i) => (
+            item[..i].trim_end_matches('@').to_string(),
+            item[i..].to_string(),
+        ),
         None => (item.to_string(), "/StatusNotifierItem".to_string()),
     }
 }
@@ -41,13 +57,17 @@ fn started(pid: u32) -> Option<String> {
 
 fn owner_uid(pid: u32) -> Option<u32> {
     use std::os::unix::fs::MetadataExt;
-    std::fs::metadata(format!("/proc/{pid}")).ok().map(|m| m.uid())
+    std::fs::metadata(format!("/proc/{pid}"))
+        .ok()
+        .map(|m| m.uid())
 }
 
 fn executable(pid: u32) -> String {
     std::fs::read_link(format!("/proc/{pid}/exe"))
         .map(|p| p.display().to_string())
-        .or_else(|_| std::fs::read_to_string(format!("/proc/{pid}/comm")).map(|c| c.trim().to_string()))
+        .or_else(|_| {
+            std::fs::read_to_string(format!("/proc/{pid}/comm")).map(|c| c.trim().to_string())
+        })
         .unwrap_or_default()
 }
 
@@ -58,16 +78,33 @@ fn pixmap_icon(pixmaps: Pixmaps) -> Option<String> {
         .filter(|(w, h, data)| *w > 0 && *h > 0 && data.len() == (*w * *h * 4) as usize)
         .min_by_key(|(w, _, _)| (w - 64).abs())?;
     // Network byte order ARGB to RGBA.
-    let rgba = argb.chunks_exact(4).flat_map(|p| [p[1], p[2], p[3], p[0]]).collect();
+    let rgba = argb
+        .chunks_exact(4)
+        .flat_map(|p| [p[1], p[2], p[3], p[0]])
+        .collect();
     crate::linux::apps::png_data_url(&image::RgbaImage::from_raw(w as u32, h as u32, rgba)?)
 }
 
 fn enumerate() -> Result<Vec<TrayApp>, String> {
-    let conn = Connection::new_session().map_err(|e| format!("Couldn't reach the session bus: {e}"))?;
-    let watcher = conn.with_proxy("org.kde.StatusNotifierWatcher", "/StatusNotifierWatcher", TIMEOUT);
+    let conn =
+        Connection::new_session().map_err(|e| format!("Couldn't reach the session bus: {e}"))?;
+    let watcher = conn.with_proxy(
+        "org.kde.StatusNotifierWatcher",
+        "/StatusNotifierWatcher",
+        TIMEOUT,
+    );
     let items: Vec<String> = watcher
-        .get("org.kde.StatusNotifierWatcher", "RegisteredStatusNotifierItems")
-        .map_err(|_| "No system tray is running. Enable the AppIndicator extension in GNOME Extensions.")?;
+        .get(
+            "org.kde.StatusNotifierWatcher",
+            "RegisteredStatusNotifierItems",
+        )
+        .map_err(|_| {
+            if crate::linux::is_xfce() {
+                "No system tray is running. Add a Status Tray plugin to the XFCE panel."
+            } else {
+                "No system tray is running. Enable the AppIndicator extension in GNOME Extensions."
+            }
+        })?;
     let bus = conn.with_proxy("org.freedesktop.DBus", "/org/freedesktop/DBus", TIMEOUT);
     let uid = unsafe { libc::getuid() };
     let mut apps = Vec::new();
@@ -84,13 +121,19 @@ fn enumerate() -> Result<Vec<TrayApp>, String> {
             continue;
         };
         let proxy = conn.with_proxy(name.as_str(), path.as_str(), TIMEOUT);
-        let interface = ["org.kde.StatusNotifierItem", "org.freedesktop.StatusNotifierItem"]
-            .into_iter()
-            .find(|i| proxy.get::<String>(i, "Id").is_ok())
-            .unwrap_or("org.kde.StatusNotifierItem");
+        let interface = [
+            "org.kde.StatusNotifierItem",
+            "org.freedesktop.StatusNotifierItem",
+        ]
+        .into_iter()
+        .find(|i| proxy.get::<String>(i, "Id").is_ok())
+        .unwrap_or("org.kde.StatusNotifierItem");
         let text = |key: &str| proxy.get::<String>(interface, key).unwrap_or_default();
         let exe = executable(pid);
-        let program = Path::new(&exe).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let program = Path::new(&exe)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
         let title = [text("Title"), text("Id"), program.clone()]
             .into_iter()
             .find(|t| !t.trim().is_empty())
@@ -102,7 +145,14 @@ fn enumerate() -> Result<Vec<TrayApp>, String> {
         let blocked_reason = if pid == std::process::id() {
             Some("Use Quit wallp from its tray menu".into())
         } else if SHELL.contains(&program.as_str()) || program.starts_with("gsd-") {
-            Some("GNOME shell".into())
+            Some(
+                if crate::linux::is_xfce() {
+                    "XFCE desktop"
+                } else {
+                    "GNOME shell"
+                }
+                .into(),
+            )
         } else if program == "xdg-dbus-proxy" {
             Some("Sandboxed app: quit it from its own menu".into())
         } else if owner_uid(pid) != Some(uid) {
@@ -118,10 +168,21 @@ fn enumerate() -> Result<Vec<TrayApp>, String> {
             .and_then(pixmap_icon)
             .or_else(|| {
                 (!icon_name.is_empty()).then(|| {
-                    crate::linux::apps::icon_named(&icon_name, (!theme_path.is_empty()).then(|| Path::new(&theme_path)))
+                    crate::linux::apps::icon_named(
+                        &icon_name,
+                        (!theme_path.is_empty()).then(|| Path::new(&theme_path)),
+                    )
                 })?
             });
-        apps.push(TrayApp { pid, started, name: title, tooltip, path: exe, blocked_reason, icon });
+        apps.push(TrayApp {
+            pid,
+            started,
+            name: title,
+            tooltip,
+            path: exe,
+            blocked_reason,
+            icon,
+        });
     }
     apps.sort_by_key(|app| (app.name.to_lowercase(), app.pid));
     apps.dedup_by_key(|app| app.pid);
@@ -149,7 +210,11 @@ pub async fn end_tray_app(pid: u32, started: String) -> Result<(), String> {
             return Err("The process changed. Refresh and try again.".into());
         }
         if unsafe { libc::kill(pid as i32, libc::SIGKILL) } != 0 {
-            return Err(format!("Couldn't end {}: {}", app.name, std::io::Error::last_os_error()));
+            return Err(format!(
+                "Couldn't end {}: {}",
+                app.name,
+                std::io::Error::last_os_error()
+            ));
         }
         Ok(())
     })
@@ -163,9 +228,21 @@ mod tests {
 
     #[test]
     fn splits_watcher_entries() {
-        assert_eq!(split_item(":1.115@/org/ayatana/NotificationItem/x"), (":1.115".into(), "/org/ayatana/NotificationItem/x".into()));
-        assert_eq!(split_item(":1.9/StatusNotifierItem"), (":1.9".into(), "/StatusNotifierItem".into()));
-        assert_eq!(split_item("org.kde.StatusNotifierItem-1-1"), ("org.kde.StatusNotifierItem-1-1".into(), "/StatusNotifierItem".into()));
+        assert_eq!(
+            split_item(":1.115@/org/ayatana/NotificationItem/x"),
+            (":1.115".into(), "/org/ayatana/NotificationItem/x".into())
+        );
+        assert_eq!(
+            split_item(":1.9/StatusNotifierItem"),
+            (":1.9".into(), "/StatusNotifierItem".into())
+        );
+        assert_eq!(
+            split_item("org.kde.StatusNotifierItem-1-1"),
+            (
+                "org.kde.StatusNotifierItem-1-1".into(),
+                "/StatusNotifierItem".into()
+            )
+        );
     }
 
     #[test]

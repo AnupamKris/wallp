@@ -22,7 +22,13 @@ pub enum Kind {
 
 /// KeePassXC and other password managers mark secrets with this target.
 const SECRET_HINT: &str = "x-kde-passwordManagerHint";
-const TEXT_TARGETS: [&str; 5] = ["UTF8_STRING", "text/plain;charset=utf-8", "text/plain", "STRING", "TEXT"];
+const TEXT_TARGETS: [&str; 5] = [
+    "UTF8_STRING",
+    "text/plain;charset=utf-8",
+    "text/plain",
+    "STRING",
+    "TEXT",
+];
 
 pub struct Watcher {
     conn: RustConnection,
@@ -37,8 +43,20 @@ impl Watcher {
         let (conn, screen) = x11rb::connect(None).map_err(|e| e.to_string())?;
         let root = conn.setup().roots[screen].root;
         let window = conn.generate_id().map_err(|e| e.to_string())?;
-        conn.create_window(0, window, root, 0, 0, 1, 1, 0, WindowClass::INPUT_ONLY, 0, &CreateWindowAux::new())
-            .map_err(|e| e.to_string())?;
+        conn.create_window(
+            0,
+            window,
+            root,
+            0,
+            0,
+            1,
+            1,
+            0,
+            WindowClass::INPUT_ONLY,
+            0,
+            &CreateWindowAux::new(),
+        )
+        .map_err(|e| e.to_string())?;
         let atom = |name: &str| -> Result<u32, String> {
             Ok(conn
                 .intern_atom(false, name.as_bytes())
@@ -63,7 +81,13 @@ impl Watcher {
         )
         .map_err(|e| e.to_string())?;
         conn.flush().map_err(|e| e.to_string())?;
-        Ok(Self { conn, window, clipboard, targets, property })
+        Ok(Self {
+            conn,
+            window,
+            clipboard,
+            targets,
+            property,
+        })
     }
 
     /// Blocks until the clipboard changes. `None` means it is empty, holds
@@ -81,7 +105,13 @@ impl Watcher {
 
     fn offered(&self) -> Result<Option<Kind>, String> {
         self.conn
-            .convert_selection(self.window, self.clipboard, self.targets, self.property, x11rb::CURRENT_TIME)
+            .convert_selection(
+                self.window,
+                self.clipboard,
+                self.targets,
+                self.property,
+                x11rb::CURRENT_TIME,
+            )
             .map_err(|e| e.to_string())?;
         self.conn.flush().map_err(|e| e.to_string())?;
         // An owner that never answers must not stall history forever.
@@ -108,7 +138,12 @@ impl Watcher {
             .map_err(|e| e.to_string())?;
         let mut names = Vec::new();
         for atom in reply.value32().into_iter().flatten() {
-            if let Ok(reply) = self.conn.get_atom_name(atom).map_err(|e| e.to_string())?.reply() {
+            if let Ok(reply) = self
+                .conn
+                .get_atom_name(atom)
+                .map_err(|e| e.to_string())?
+                .reply()
+            {
                 names.push(String::from_utf8_lossy(&reply.name).into_owned());
             }
         }
@@ -137,7 +172,9 @@ fn classify(targets: &[String]) -> Option<Kind> {
 
 /// X11 clipboard content is served by its owner, so keep one arboard handle
 /// alive for the whole session or pasted entries vanish when it drops.
-pub fn with<R>(f: impl FnOnce(&mut arboard::Clipboard) -> Result<R, arboard::Error>) -> Result<R, String> {
+pub fn with<R>(
+    f: impl FnOnce(&mut arboard::Clipboard) -> Result<R, arboard::Error>,
+) -> Result<R, String> {
     static CLIPBOARD: Mutex<Option<arboard::Clipboard>> = Mutex::new(None);
     let mut slot = CLIPBOARD.lock().unwrap();
     if slot.is_none() {
@@ -154,7 +191,10 @@ mod tests {
     fn classifies_targets_and_skips_secrets() {
         let t = |v: &[&str]| classify(&v.iter().map(|s| s.to_string()).collect::<Vec<_>>());
         assert!(matches!(t(&["TARGETS", "UTF8_STRING"]), Some(Kind::Text)));
-        assert!(matches!(t(&["text/html", "image/png", "UTF8_STRING"]), Some(Kind::Image)));
+        assert!(matches!(
+            t(&["text/html", "image/png", "UTF8_STRING"]),
+            Some(Kind::Image)
+        ));
         assert!(t(&["UTF8_STRING", SECRET_HINT]).is_none());
         assert!(t(&["text/uri-list"]).is_none());
     }
