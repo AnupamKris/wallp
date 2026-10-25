@@ -1,0 +1,8 @@
+# UI conventions
+
+- Build new and updated UI with the existing shadcn components in `src/components/ui` (for example `Button`, `Card`, `Dialog`, `Switch`, and `Input`). Reuse their variants, sizes, focus states, and disabled states.
+- Follow the project's shadcn styling: corners follow the selected style (square Lyra or rounded Maia), so shared components carry `maia:` rounded classes and custom CSS uses `--radius-surface`, `--radius-panel`, `--radius-item`, or `--radius-control` instead of fixed radii. Maia is also a light theme (the `dark` class is removed) and swaps `--primary`, `--ring` and the surface tokens to the chosen accent, so use `bg-primary`, `--theme-accent` or other tokens for highlights and status colours rather than fixed dark-only colours. Use the shared typography, spacing, borders, and semantic theme tokens. Do not introduce a separate visual style for a feature.
+- Use semantic tokens such as `bg-card`, `text-card-foreground`, `text-muted-foreground`, `border-border`, and `bg-primary`. Avoid hard-coded feature palettes or CSS overrides that restyle shared controls.
+- Separate Tauri windows, notifications, and overlays must load the saved appearance using `useTheme` from `src/Theme.tsx` and stay synchronized with appearance changes.
+- Keep custom CSS limited to layout or behavior the shared components do not provide, such as notification timing animations. Use theme tokens for any custom drawing.
+- Verify changed UI at its actual window size, including long text and error states. For native overlays, verify timeout and dismiss hide the native window as well as clearing its content.

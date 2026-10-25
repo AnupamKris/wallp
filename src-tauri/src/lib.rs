@@ -6,9 +6,24 @@ compile_error!(
 mod agnes;
 mod ai_history;
 mod clipboard_history;
+#[cfg(windows)]
+mod controller_mouse;
+#[cfg(windows)]
+mod controller_overlay;
+#[cfg(windows)]
+mod desk_buddy;
 #[cfg_attr(target_os = "linux", path = "linux/desktop.rs")]
 mod desktop;
+#[cfg(windows)]
+mod email_codes;
 mod email_digest;
+#[cfg(windows)]
+mod email_notifications;
+mod file_search;
+#[cfg(windows)]
+mod game_input;
+#[cfg(windows)]
+mod game_library;
 mod gmail;
 mod home_shortcuts;
 mod launcher;
@@ -16,7 +31,10 @@ mod launcher;
 mod linux;
 mod mail_cache;
 mod power;
+#[cfg(windows)]
 mod quick_settings;
+#[cfg_attr(target_os = "linux", path = "linux/system_controls.rs")]
+mod system_controls;
 #[cfg_attr(target_os = "linux", path = "linux/taskbar.rs")]
 mod taskbar;
 #[cfg_attr(target_os = "linux", path = "linux/tray_apps.rs")]
@@ -129,6 +147,27 @@ fn set_icons_visible_inner(app: &AppHandle, visible: bool) {
 #[tauri::command]
 fn set_icons_visible(app: AppHandle, visible: bool) {
     set_icons_visible_inner(&app, visible);
+}
+
+/// The tray menu's actions for the command menu, since the tray is out of
+/// reach while wallp hides the Windows taskbar.
+#[tauri::command]
+fn launcher_wallp(app: AppHandle, action: String) -> Result<(), String> {
+    launcher::close_launcher(app.clone())?;
+    match action.as_str() {
+        "restore_taskbar" => taskbar::restore(&app),
+        "reload" => {
+            if let Some(window) = app.get_webview_window(DESKTOP) {
+                window.reload().map_err(|e| e.to_string())?;
+            }
+        }
+        "quit" => {
+            restore_desktop(&app);
+            app.exit(0);
+        }
+        _ => return Err("Unknown wallp command".into()),
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -317,12 +356,16 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        // A second copy would fight the first over the desktop.
+        // A second copy would fight the first over the desktop. Launching
+        // again opens the command menu, which works with the taskbar hidden.
         // GNOME shortcuts reach the running copy as arguments of a second one.
         // (XFCE's are grabbed directly; see linux/hotkeys.rs.)
-        .plugin(tauri_plugin_single_instance::init(|_app, _args, _| {
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _| {
             #[cfg(target_os = "linux")]
-            launcher::handle_shortcut_args(_app, &_args);
+            if launcher::handle_shortcut_args(app, &_args) {
+                return;
+            }
+            let _ = launcher::open_launcher(app.clone(), None);
         }))
         .plugin(tauri_plugin_opener::init())
         .manage(taskbar::Taskbar::default())
@@ -333,16 +376,51 @@ pub fn run() {
             quitting: AtomicBool::new(false),
         })
         .invoke_handler(tauri::generate_handler![
+            #[cfg(windows)]
+            desk_buddy::desk_buddy_activity,
+            #[cfg(windows)]
+            game_input::game_input_state,
+            #[cfg(windows)]
+            controller_mouse::game_mouse_enabled,
+            #[cfg(windows)]
+            controller_overlay::controller_overlay_ready,
+            #[cfg(windows)]
+            controller_overlay::controller_overlay_dismiss,
+            #[cfg(windows)]
+            controller_overlay::controller_overlay_confirm,
+            #[cfg(windows)]
+            controller_overlay::controller_overlay_key,
+            #[cfg(windows)]
+            game_input::game_focus_home,
+            #[cfg(windows)]
+            game_library::game_library,
+            #[cfg(windows)]
+            game_library::launch_game,
+            #[cfg(windows)]
+            game_library::add_custom_game,
+            #[cfg(windows)]
+            game_library::remove_custom_game,
+            #[cfg(windows)]
+            game_library::set_game_hidden,
+            #[cfg(windows)]
+            game_library::pick_game_program,
+            #[cfg(windows)]
+            email_notifications::email_code_ready,
+            #[cfg(windows)]
+            email_notifications::email_code_dismiss,
+            #[cfg(windows)]
+            email_notifications::email_code_copy,
             set_icons_visible,
+            launcher_wallp,
             desktop_paused,
             launch_shortcut,
             tray_apps::list_tray_apps,
             tray_apps::end_tray_app,
-            quick_settings::quick_settings_status,
-            quick_settings::set_quick_setting,
-            quick_settings::open_system_settings,
-            quick_settings::bluetooth_devices,
-            quick_settings::bluetooth_device,
+            #[cfg(windows)]
+            quick_settings::open_quick_settings,
+            system_controls::quick_settings_state,
+            system_controls::set_quick_setting,
+            system_controls::quick_settings_manage,
             taskbar::taskbar_supported,
             taskbar::taskbar_enabled,
             taskbar::set_taskbar_enabled,
@@ -352,6 +430,7 @@ pub fn run() {
             taskbar::activate_app_window,
             taskbar::show_wallp_desktop,
             launcher::launcher_ready,
+            launcher::launcher_set_expanded,
             launcher::open_launcher,
             launcher::close_launcher,
             launcher::launcher_apps,
@@ -362,6 +441,8 @@ pub fn run() {
             home_shortcuts::set_home_shortcut,
             home_shortcuts::launch_home_shortcut,
             launcher::launcher_search,
+            file_search::search_files,
+            file_search::open_search_file,
             agnes::launcher_ai,
             email_digest::email_digest_cached,
             email_digest::email_digest_refresh,
@@ -370,6 +451,8 @@ pub fn run() {
             gmail::email_disconnect,
             gmail::email_cached_inbox,
             gmail::email_inbox,
+            gmail::email_search,
+            gmail::email_fetch,
             gmail::email_cached_thread,
             gmail::email_prefetch,
             gmail::email_thread,
@@ -379,6 +462,11 @@ pub fn run() {
             ai_history::ai_load_chat,
             ai_history::ai_delete_chat,
             launcher::clipboard_entries,
+            launcher::pin_clipboard,
+            launcher::remove_clipboard_pin,
+            launcher::copy_clipboard_entry,
+            launcher::copy_clipboard_pin,
+            gmail::email_search_cached,
             launcher::paste_clipboard,
             launcher::clear_clipboard_history,
             launcher::launcher_preferences,
@@ -386,6 +474,14 @@ pub fn run() {
         ])
         .setup(|app| {
             let handle = app.handle().clone();
+            #[cfg(windows)]
+            {
+                app.manage(controller_mouse::ControllerMouse::default());
+                controller_overlay::setup(&handle)?;
+                controller_mouse::spawn(handle.clone());
+                app.manage(email_notifications::Notifications::default());
+                email_notifications::setup(&handle)?;
+            }
             if let Err(error) = email_digest::initialize(&handle) {
                 eprintln!("wallp: couldn't initialize email digest: {error}");
             }

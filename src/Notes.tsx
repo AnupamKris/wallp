@@ -1,18 +1,22 @@
-﻿import { useRef, useState } from "react";
+﻿import { useEffect, useRef, useState } from "react";
 import { PlusIcon, XIcon } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 
+import { noteKey } from "./workspace-store";
+import { ReminderAction } from "./workspace-actions";
+
 type Note = { id: string; title: string; text: string };
 type State = { tabs: Note[]; closed: Note[]; activeId: string };
-const storageKey = "wallp.notes.tabs";
+
 const newNote = (): Note => ({ id: crypto.randomUUID(), title: "Untitled", text: "" });
 function emptyState(text = ""): State {
   const note = { ...newNote(), text };
   return { tabs: [note], closed: [], activeId: note.id };
 }
-function load(): State {
+function load(spaceId: string): State {
+  const storageKey = noteKey(spaceId);
   const raw = localStorage.getItem(storageKey);
-  if (raw === null) return emptyState(localStorage.getItem("wallp.notes") ?? "");
+  if (raw === null) return emptyState(spaceId === "default" ? localStorage.getItem("wallp.notes") ?? "" : "");
   const state = JSON.parse(raw);
   const valid = (note: Note) => note && typeof note.id === "string" && typeof note.title === "string" && typeof note.text === "string";
   if (!state || !Array.isArray(state.tabs) || !state.tabs.length || !Array.isArray(state.closed)
@@ -22,13 +26,21 @@ function load(): State {
   return state;
 }
 
-export function Notes() {
+export function Notes({ spaceId = "default" }: { spaceId?: string }) {
+  const storageKey = noteKey(spaceId);
   const [initial] = useState(() => {
-    try { return { state: load(), error: false }; }
+    try { return { state: load(spaceId), error: false }; }
     catch { return { state: emptyState(), error: true }; }
   });
   const [state, setState] = useState(initial.state);
   const [saved, setSaved] = useState(!initial.error);
+  const [reminder, setReminder] = useState<string | null>(null);
+  useEffect(() => {
+    const refresh = () => { try { setState(load(spaceId)); setSaved(true); } catch { setSaved(false); } };
+    const storage = (event: StorageEvent) => { if (!event.key || event.key === storageKey) refresh(); };
+    window.addEventListener("wallp:notes-changed", refresh); window.addEventListener("storage", storage);
+    return () => { window.removeEventListener("wallp:notes-changed", refresh); window.removeEventListener("storage", storage); };
+  }, [spaceId, storageKey]);
   const [wrap, setWrap] = useState(true);
   const [renaming, setRenaming] = useState(false);
   const editor = useRef<HTMLTextAreaElement>(null);
@@ -38,7 +50,7 @@ export function Notes() {
     setState(next);
     // Do not overwrite unreadable saved notes with a blank draft.
     if (initial.error) { setSaved(false); return; }
-    try { localStorage.setItem(storageKey, JSON.stringify(next)); setSaved(true); }
+    try { localStorage.setItem(storageKey, JSON.stringify(next)); setSaved(true); window.dispatchEvent(new Event("wallp:notes-changed")); }
     catch { setSaved(false); }
   }
   function update(patch: Partial<Note>) {
@@ -94,6 +106,7 @@ export function Notes() {
         : <Button variant="ghost" size="sm" onClick={() => setRenaming(true)}>Rename</Button>}
       <Button variant="ghost" size="sm" aria-pressed={wrap} onClick={() => setWrap(!wrap)}>Word wrap</Button>
       <Button variant="ghost" size="sm" onClick={download}>Export .txt</Button>
+      <Button variant="ghost" size="sm" disabled={!active.text.trim()} onClick={() => { const element = editor.current; setReminder(element && element.selectionStart !== element.selectionEnd ? active.text.slice(element.selectionStart, element.selectionEnd) : active.text); }}>Remind me</Button>
       {!!state.closed.length && <Button variant="ghost" size="sm" onClick={() => {
         const note = state.closed[state.closed.length - 1];
         setRenaming(false); save({ tabs: [...state.tabs, note], closed: state.closed.slice(0, -1), activeId: note.id });
@@ -106,6 +119,7 @@ export function Notes() {
           if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") { event.preventDefault(); save(state); }
         }} />
     </div>
+    {reminder !== null && <ReminderAction text={reminder} source={{ title: active.title, noteId: active.id, spaceId }} onClose={() => setReminder(null)} />}
     <footer className="notes-status">
       <span role="status">{saved ? "Saved on this device" : "Could not save — export to keep a copy"}</span>
       <span>{active.text.length.toLocaleString()} characters</span>

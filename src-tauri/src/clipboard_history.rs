@@ -79,6 +79,7 @@ impl History {
             }
             tx.commit().map_err(|e| e.to_string())?;
         }
+        connection.execute_batch("CREATE TABLE IF NOT EXISTS pinned_clips (key TEXT PRIMARY KEY, kind TEXT NOT NULL, text TEXT NOT NULL, image BLOB NOT NULL);").map_err(|e| e.to_string())?;
         Ok(Self(connection))
     }
 
@@ -192,11 +193,80 @@ impl History {
             .execute_batch("DELETE FROM clips; PRAGMA wal_checkpoint(TRUNCATE); VACUUM;")
             .map_err(|e| e.to_string())
     }
+
+    pub fn pin(&self, id: i64, key: &str) -> Result<(), String> {
+        let count = self.0.execute("INSERT INTO pinned_clips(key,kind,text,image) SELECT ?1,kind,text,image FROM clips WHERE id=?2", params![key, id]).map_err(|e| e.to_string())?;
+        if count != 1 {
+            return Err("Clipboard item no longer exists.".into());
+        }
+        Ok(())
+    }
+
+    pub fn unpin(&self, key: &str) -> Result<(), String> {
+        self.0
+            .execute("DELETE FROM pinned_clips WHERE key=?1", [key])
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn get_pin(&self, key: &str) -> Result<Content, String> {
+        let (kind, text, bytes): (String, String, Vec<u8>) = self
+            .0
+            .query_row(
+                "SELECT kind,text,image FROM pinned_clips WHERE key=?1",
+                [key],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .map_err(|e| e.to_string())?;
+        if kind == "image" {
+            Ok(Content::Image(
+                image::load_from_memory_with_format(&bytes, image::ImageFormat::Png)
+                    .map_err(|e| e.to_string())?
+                    .to_rgba8(),
+            ))
+        } else {
+            Ok(Content::Text(text))
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn pins_keep_full_text_and_image_after_history_clear_and_restart() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("pins.db");
+        {
+            let mut history = History::open(&path).unwrap();
+            let text = "a long clipboard item ".repeat(1000);
+            history.remember(Content::Text(text.clone())).unwrap();
+            let id = history.page("", 0).unwrap().entries[0].id;
+            history.pin(id, "text-pin").unwrap();
+            let image = image::RgbaImage::from_pixel(40, 30, image::Rgba([1, 2, 3, 255]));
+            history.remember(Content::Image(image)).unwrap();
+            let id = history.page("", 0).unwrap().entries[0].id;
+            history.pin(id, "image-pin").unwrap();
+            history.clear().unwrap();
+            assert_eq!(history.page("", 0).unwrap().total, 0);
+            match history.get_pin("text-pin").unwrap() {
+                Content::Text(saved) => assert_eq!(saved, text),
+                _ => panic!("Expected full text"),
+            }
+        }
+        let history = History::open(&path).unwrap();
+        match history.get_pin("image-pin").unwrap() {
+            Content::Image(image) => {
+                assert_eq!(image.dimensions(), (40, 30));
+                assert_eq!(image.get_pixel(0, 0).0, [1, 2, 3, 255]);
+            }
+            _ => panic!("Expected original image"),
+        }
+        history.unpin("image-pin").unwrap();
+        assert!(history.get_pin("image-pin").is_err());
+        assert!(history.get_pin("text-pin").is_ok());
+        assert!(history.pin(999999, "missing").is_err());
+    }
     #[test]
     fn older_database_gets_unicode_search_without_losing_entries() {
         let path = std::env::temp_dir().join(format!(

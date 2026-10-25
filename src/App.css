@@ -2,8 +2,13 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/jetbrains-mono";
+@import "@fontsource-variable/geist";
+@import "@fontsource/instrument-serif";
+@import "@fontsource/instrument-serif/400-italic.css";
 
 @custom-variant dark (&:is(.dark *));
+/* Maia style: shadcn components add rounded `maia:` classes; custom CSS reads the radius tokens below. */
+@custom-variant maia (&:where([data-style="maia"], [data-style="maia"] *));
 
 /* One palette supplies the wallpaper, clock artwork and app surfaces. */
 :root {
@@ -16,6 +21,35 @@
   --theme-muted: color-mix(in srgb, var(--theme-foreground) 57%, var(--theme-base));
   --theme-text: color-mix(in srgb, var(--theme-foreground) 76%, var(--theme-base));
   --theme-strong: color-mix(in srgb, var(--theme-foreground) 92%, var(--theme-base));
+  /* Lyra keeps every corner square; Maia rounds surfaces, panels, rows and pill controls. */
+  --radius-surface: 0px;
+  --radius-panel: 0px;
+  --radius-item: 0px;
+  --radius-control: 0px;
+}
+html[data-style="maia"] {
+  --radius: .625rem;
+  --radius-surface: 1.5rem;
+  --radius-panel: 1rem;
+  --radius-item: .625rem;
+  --radius-control: 999px;
+  /* Maia is light and editorial: white surfaces on ivory paper, neutral hairlines, and the accent kept for selection. */
+  --theme-accent: var(--maia-accent, #5a4fcf);
+  --theme-surface: #ffffff;
+  --theme-raised: color-mix(in srgb, var(--theme-foreground) 4%, var(--theme-base));
+  --theme-border: color-mix(in srgb, var(--theme-foreground) 9%, var(--theme-base));
+  --theme-border-strong: color-mix(in srgb, var(--theme-foreground) 20%, var(--theme-base));
+  --theme-muted: color-mix(in srgb, var(--theme-foreground) 55%, var(--theme-base));
+  --theme-text: color-mix(in srgb, var(--theme-foreground) 82%, var(--theme-base));
+  --theme-selected: color-mix(in srgb, var(--theme-accent) 8%, #ffffff);
+  --maia-shadow: 0 1px 2px rgb(20 18 30 / 4%), 0 4px 16px -6px rgb(20 18 30 / 8%);
+  --maia-shadow-lifted: 0 2px 4px rgb(20 18 30 / 4%), 0 16px 40px -12px rgb(20 18 30 / 18%);
+  /* Geist for text, Instrument Serif for titles; code keeps JetBrains Mono. */
+  --font-mono: "Geist Variable", "Segoe UI", sans-serif;
+  --font-display: "Instrument Serif", Georgia, serif;
+  --font-code: "JetBrains Mono Variable", monospace;
+  font-family: var(--font-mono);
+  color-scheme: light;
 }
 
 html.dark {
@@ -36,6 +70,27 @@ html.dark {
   --border: var(--theme-border);
   --input: var(--theme-border);
   --ring: var(--theme-muted);
+}
+html[data-style="maia"] {
+  --background: var(--theme-base);
+  --foreground: var(--theme-foreground);
+  --card: var(--theme-surface);
+  --card-foreground: var(--theme-foreground);
+  --popover: #ffffff;
+  --popover-foreground: var(--theme-foreground);
+  --secondary: var(--theme-raised);
+  --secondary-foreground: var(--theme-foreground);
+  --muted: var(--theme-raised);
+  --muted-foreground: var(--theme-muted);
+  --border: var(--theme-border);
+  --input: var(--theme-border);
+  --primary: var(--theme-accent);
+  --primary-foreground: var(--maia-ink, #ffffff);
+  --accent: var(--theme-raised);
+  --accent-foreground: var(--theme-foreground);
+  --ring: var(--theme-accent);
+  --chart-1: var(--theme-accent);
+  --chart-2: var(--maia-glow, #ec4899);
 }
 
 :root {
@@ -82,8 +137,11 @@ html.dark {
 * { box-sizing: border-box; }
 html, body, #root { margin: 0; width: 100%; height: 100%; overflow: hidden; }
 button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
-.desktop { position: relative; width: 100%; height: 100%; background: var(--theme-wallpaper, #111111); }
-.tray-launcher { position: absolute; top: clamp(20px, 4vh, 48px); right: clamp(20px, 4vw, 80px); z-index: 2; display: flex; align-items: center; gap: 10px; padding: 12px 18px; background: var(--theme-surface, #181818); color: var(--theme-text, #c5c5c5); border: 1px solid var(--theme-border, #363636); font: 12px var(--font-mono); }
+/* clip, not hidden: focusing a control on the off-screen Workspace must not scroll Home out of place. */
+.desktop { position: relative; width: 100%; height: 100%; overflow: clip; background: var(--theme-wallpaper, #111111); }
+.system-controls { position: absolute; top: clamp(20px, 4vh, 48px); right: clamp(20px, 4vw, 80px); left: clamp(20px, 4vw, 80px); z-index: 2; display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 10px; pointer-events: none; }
+.tray-launcher { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 12px 18px; background: var(--theme-surface, #181818); color: var(--theme-text, #c5c5c5); border: 1px solid var(--theme-border, #363636); font: 12px var(--font-mono); pointer-events: auto; }
+.tray-launcher:disabled { opacity: .5; cursor: wait; }
 .tray-launcher:hover { background: var(--theme-raised, #252525); color: var(--theme-foreground, #eee); }
 .tray-dialog { position: fixed; inset: 0; margin: auto; padding: 0; width: min(1000px, calc(100vw - 48px)); max-width: none; max-height: min(780px, calc(100dvh - 64px)); background: var(--theme-surface, #151515); color: var(--theme-text, #c5c5c5); border: 1px solid var(--theme-border, #414141); box-shadow: 0 32px 100px #0009; font-family: var(--font-mono); overflow: hidden; }
 .tray-dialog[open] { display: flex; flex-direction: column; }
@@ -118,7 +176,7 @@ button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .tray-refreshing { animation: tray-spin 1s linear infinite; }
 @keyframes tray-spin { to { transform: rotate(360deg); } }
 @media (max-width: 850px) { .tray-apps { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 560px) { .tray-launcher { top: 16px; right: 16px; } .tray-dialog { width: calc(100vw - 24px); max-height: calc(100dvh - 24px); } .tray-apps { grid-template-columns: 1fr; padding: 0 16px 16px; } .tray-heading { padding: 20px 16px 16px; gap: 8px; } .tray-hint { padding: 0 16px 20px; } .tray-footer { padding: 14px 16px; } }
+@media (max-width: 560px) { .system-controls { top: 16px; right: 16px; left: 16px; } .tray-dialog { width: calc(100vw - 24px); max-height: calc(100dvh - 24px); } .tray-apps { grid-template-columns: 1fr; padding: 0 16px 16px; } .tray-heading { padding: 20px 16px 16px; gap: 8px; } .tray-hint { padding: 0 16px 20px; } .tray-footer { padding: 14px 16px; } }
 @media (prefers-reduced-motion: reduce) { .tray-refreshing { animation: none; } }
 
 .rail { position: absolute; top: 50%; transform: translateY(-50%); display: flex; flex-direction: column; gap: 16px; }
@@ -141,7 +199,7 @@ button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
   padding: 14px;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 0;
+  border-radius: var(--radius-item);
   transition: color 160ms ease, background-color 160ms ease, border-color 160ms ease;
 }
 .shortcut svg { display: block; width: 24px; height: 24px; }
@@ -193,6 +251,13 @@ button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .world-clock { display: flex; flex-direction: column; align-items: center; gap: 20px; flex: 0 1 var(--clock-size); min-width: 0; }
 .clock-art { width: var(--clock-size); max-width: 100%; aspect-ratio: 1; display: grid; place-items: center; container-type: inline-size; }
 .analog-face { width: 100%; height: 100%; display: block; }
+.dial-city-label { fill: var(--theme-muted, #999); font-family: "JetBrains Mono Variable", monospace; letter-spacing: 1px; text-transform: uppercase; }
+.clock-city-settings { display: grid; gap: 14px; margin-bottom: 28px; }
+.clock-city-setting { display: grid; gap: 8px; min-width: 0; }
+.clock-city-setting label { display: flex; align-items: center; gap: 8px; font-size: 11px; }
+.clock-city-setting label i { width: 6px; height: 6px; }
+.clock-city-setting select { width: 100%; min-width: 0; padding: 9px 8px; border: 1px solid var(--theme-border, #333); background: var(--theme-surface, #151515); color: var(--theme-foreground, #ddd); font: inherit; font-size: 11px; }
+.clock-city-setting select:focus-visible { outline: 1px solid var(--theme-strong, #ddd); outline-offset: 2px; }
 .face-bauhaus .tick.major { stroke-width: 5; stroke: var(--theme-text, #b0b0b0); }
 .face-bauhaus .hour-hand { stroke-width: 10; }
 .face-bauhaus .minute-hand { stroke-width: 5; }
@@ -272,7 +337,7 @@ button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .blocks-face small { color: var(--theme-muted, #777); font-size: 4cqw; letter-spacing: .16em; }
 .settings-trigger { position: absolute; bottom: clamp(24px, 6vh, 68px); right: clamp(20px, 4vw, 80px); }
 /* Lyra settings: control appearance lives in shadcn components. */
-.settings-dialog[data-slot="dialog-content"] { inset: 16px; width: auto; max-width: none; height: calc(100dvh - 32px); max-height: none; translate: none; transform: none; animation: none; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; overflow: hidden; padding: 0; gap: 0; background: var(--theme-surface, #151515); }
+.settings-dialog[data-slot="dialog-content"] { inset: 16px; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; overflow: hidden; padding: 0; gap: 0; background: var(--theme-surface, #151515); }
 .settings-header { display: flex; flex-direction: column; gap: 8px; padding: 24px 32px; border-bottom: 1px solid var(--theme-border, #2b2b2b); }
 .settings-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: auto; scrollbar-color: var(--theme-border-strong, #606060) var(--theme-surface, #1b1b1b); scrollbar-gutter: stable; display: grid; grid-template-columns: minmax(0, 1fr) minmax(290px, 340px); gap: 32px; padding: 28px 32px; align-items: start; }
 .settings-gallery, .settings-controls { min-width: 0; }
@@ -311,7 +376,7 @@ button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
 }
 @media (max-width: 600px) {
   .world-clocks { inset: 24px 30px 185px; }
-  .settings-dialog[data-slot="dialog-content"] { inset: 0; height: 100dvh; }
+  .settings-dialog[data-slot="dialog-content"] { inset: 0; }
   .settings-header { padding: 20px; }
   .settings-body { padding: 20px; }
   .settings-footer { padding: 12px 20px; }
@@ -337,7 +402,7 @@ button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .size-preset small { color: var(--theme-muted, #999); font-size: 9px; }
 .size-preset[aria-pressed="true"] { border-color: var(--theme-strong, #ddd); background: var(--theme-raised, #222); }
 .size-hint { color: var(--theme-muted, #999); font-size: 10px; line-height: 1.5; }
-[data-slot="switch"], [data-slot="switch-thumb"], [data-slot="slider-thumb"], [data-slot="slider-track"], [data-slot="slider-range"] { border-radius: 0; }
+:root:not([data-style="maia"]) :is([data-slot="switch"], [data-slot="switch-thumb"], [data-slot="slider-thumb"], [data-slot="slider-track"], [data-slot="slider-range"]) { border-radius: 0; }
 
 @theme inline {
   --font-heading: var(--font-mono);
@@ -505,11 +570,10 @@ button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .layout-save-status { position: absolute; right: 16px; color: var(--theme-muted, #707070); font-size: 9px; }
 .layout-controls { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--theme-border-strong, #444); background: var(--theme-surface, #1c1c1c); font-size: 10px; }
 .layout-controls > div { display: flex; gap: 4px; }
-.layout-editing .app-panel { border: 1px dashed var(--theme-muted, #777); }
-.panel-drag { width: 30px; height: 30px; font-size: 24px; cursor: grab; touch-action: none; }
+.panel-drag { cursor: grab; touch-action: none; }
 .panel-drag:active { cursor: grabbing; }
-.panel-resize { position: absolute; right: 0; bottom: 0; width: 30px; height: 30px; cursor: nwse-resize; background: var(--theme-raised, #282828); color: var(--theme-foreground, #eee); font-size: 25px; touch-action: none; }
-.panel-drag:focus-visible, .panel-resize:focus-visible { outline: 1px solid white; outline-offset: -2px; }
+.panel-resize { position: absolute; right: 0; bottom: 0; cursor: nwse-resize; touch-action: none; }
+
 .workspace-empty { display: flex; height: 100%; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: var(--theme-text, #aaa); font-size: 14px; }
 .workspace-empty small { color: var(--theme-muted, #777); font-size: 11px; }
 .productivity { padding: 18px 22px; font-size: 12px; }
@@ -552,32 +616,6 @@ button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
   .layout-controls > span::after { content: "Freeform resizing is available on wider screens"; font-size: 10px; }
 }
 
-/* Integer grid layout. Drag previews never reparent or move the captured handle. */
-.workspace-canvas.snap-grid { display: grid; gap: 0; isolation: isolate; }
-.snap-grid .app-panel { position: relative; left: auto; top: auto; width: auto; height: auto; z-index: 1; }
-.snap-grid .panel-moving { opacity: .45; }
-.snap-grid .workspace-empty { grid-column: 1 / -1; grid-row: 1 / -1; }
-.grid-cell { border: 1px solid #353b33; background: #20251d; pointer-events: none; z-index: 0; }
-.grid-drop-preview { pointer-events: none; z-index: 5; background: #b1c89c22; border: 2px solid #bbd5a4; display: grid; place-items: center; }
-.grid-drop-preview span { background: #263020; color: #e2eddb; padding: 8px 12px; font-size: 11px; }
-.grid-drop-preview.invalid-drop { background: #c28d6a22; border-color: #c79271; }
-.grid-drop-preview.invalid-drop span { background: #382b24; }
-.is-dragging { cursor: grabbing; }
-.grid-controls { padding: 10px 16px; display: flex; align-items: center; flex-wrap: wrap; gap: 12px 24px; border-bottom: 1px solid #41463c; background: #1b1e18; font-size: 11px; }
-.grid-control-group { display: flex; gap: 10px; align-items: center; }
-.grid-control-group label { display: flex; align-items: center; gap: 8px; color: #a4ad9e; }
-.grid-control-group select { background: #22271f; color: #e0e5dc; border: 1px solid #434c3c; padding: 6px 8px; color-scheme: dark; min-width: 50px; }
-.grid-hint { flex-basis: 100%; margin: 0; color: #929d8a; font-size: 10px; }
-.panel-span { color: #7e8976; font-size: 9px; white-space: nowrap; }
-.layout-editing .snap-grid .app-panel { border-style: solid; border-color: #46513d; }
-@media (max-width: 700px) {
-  .workspace-canvas.snap-grid { display: flex; flex-direction: column; }
-  .snap-grid .app-panel { flex: 0 0 340px; }
-  .grid-cell { display: none; }
-  .grid-controls { gap: 8px; padding: 8px; }
-  .grid-hint { font-size: 0; }
-  .grid-hint::after { content: "Panels stack on small screens. Your desktop grid is saved."; font-size: 10px; }
-}
 /* The bar has its own top-level webview, outside the wallpaper layer. */
 
 html.dock-view, .dock-view body, .dock-view #root { background: transparent; }
@@ -760,4 +798,112 @@ html.dock-view, .dock-view body, .dock-view #root { background: transparent; }
   .home-content { inset: 80px 24px 170px; }
   .digest-account { flex-direction: column; }
   .digest-footer { font-size: 8px; }
+}
+
+/* Maia corners for custom surfaces; every token is 0 under Lyra. */
+.tray-dialog, .settings-dialog[data-slot="dialog-content"] { border-radius: var(--radius-surface); }
+.app-panel, .workspace-toolbar, .tray-apps li, .launch-error, .theme-preview, .reminder-alerts > div, .taskbar-control p, .email-digest, .theme-settings .theme-style { border-radius: var(--radius-panel); }
+.flip-card, .style-option, .size-preset, .theme-swatch, .theme-swatch-paint, .email-row, .email-reply textarea, .notes-toolbar button, .app-placeholder-marker, .home-app-remove { border-radius: var(--radius-item); }
+.tray-launcher, .tray-icon-button, .tray-end, .tray-count, .clock-city-setting select, .note-title-input, .productivity input:not([type=checkbox]), .productivity select, .taskbar-control > button, .digest-categories button, .segmented { border-radius: var(--radius-control); }
+.segmented { overflow: hidden; }
+@media (max-width: 600px) { .settings-dialog[data-slot="dialog-content"] { border-radius: 0; } }
+
+/* Style options preview their corner shape. */
+.theme-styles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.theme-style { align-items: flex-start; padding: 12px; text-align: left; border-color: var(--theme-border); }
+.theme-style > span:nth-of-type(2) { color: var(--theme-foreground); font-size: 11px; }
+.theme-style > small { font-size: 9px; }
+.theme-style-sample { display: flex; align-items: center; gap: 6px; }
+.theme-style-sample i, .theme-style-sample b { display: block; height: 18px; border: 1px solid var(--theme-border-strong); background: var(--theme-raised); }
+.theme-style-sample i { width: 28px; }
+.theme-style-sample b { width: 44px; background: var(--theme-foreground); border-color: var(--theme-foreground); }
+[data-style-option="maia"] .theme-style-sample i { border-radius: 6px; }
+[data-style-option="maia"] .theme-style-sample b { border-radius: 999px; }
+
+/* Maia selected and pressed states use the accent colour. */
+html[data-style="maia"] .shortcut:active { background: var(--theme-accent); color: var(--maia-ink); border-color: var(--theme-accent); }
+html[data-style="maia"] :is(.theme-swatch, .size-preset, .digest-categories button)[aria-pressed="true"] { border-color: var(--theme-accent); }
+html[data-style="maia"] :is(.notes-toolbar button, .digest-categories button)[aria-pressed="true"] { color: var(--theme-foreground); background: var(--theme-selected); }
+html[data-style="maia"] .workspace-position i.active { background: var(--theme-accent); }
+[data-style-option="maia"] .theme-style-sample b { background: var(--maia-accent, #5a4fcf); border-color: transparent; }
+
+/* Light Maia replaces the dark-only status and tray colours with readable tokens. */
+html[data-style="maia"] :is(.tray-eyebrow, .tray-app-icon, .reminder-alerts small) { color: var(--theme-accent); }
+html[data-style="maia"] .tray-count { background: var(--theme-raised); color: var(--theme-foreground); }
+html[data-style="maia"] .tray-end { border-color: color-mix(in srgb, var(--destructive) 40%, #ffffff); background: color-mix(in srgb, var(--destructive) 8%, #ffffff); color: var(--destructive); }
+html[data-style="maia"] .tray-end:hover:enabled { border-color: var(--destructive); background: color-mix(in srgb, var(--destructive) 14%, #ffffff); color: var(--destructive); }
+html[data-style="maia"] :is(.tray-footer .tray-error, .email-error, .dock-error, .quick-error, .quick-launcher-error) { color: var(--destructive); }
+html[data-style="maia"] .taskbar-control p { background: color-mix(in srgb, var(--destructive) 8%, #ffffff); border-color: color-mix(in srgb, var(--destructive) 40%, #ffffff); color: var(--destructive); }
+html[data-style="maia"] :is(.todo-content .overdue, .storage-warning, .email-offline) { color: #b45309; }
+html[data-style="maia"] .email-row.selected { background: var(--theme-raised); }
+html[data-style="maia"] .email-row.unread .email-row-top strong::before { background: var(--theme-accent); }
+html[data-style="maia"] .email-notice button { color: var(--theme-accent); }
+html[data-style="maia"] .todo-row input[type=checkbox] { accent-color: var(--theme-accent); }
+html[data-style="maia"] :is(.productivity input:not([type=checkbox]), .productivity select) { color-scheme: light; }
+html[data-style="maia"] .taskbar-control > button:hover:enabled { color: var(--theme-foreground); border-color: var(--theme-border-strong); }
+html[data-style="maia"] .flip-card::after { box-shadow: none; }
+html[data-style="maia"] *:focus-visible { outline-color: var(--theme-accent); }
+html[data-style="maia"] .theme-heading > button { padding-inline: 10px; border-radius: var(--radius-control); }
+
+/* Maia editorial layer: serif display titles, readable sans text, airy spacing, and soft shadows in place of outlines. */
+html[data-style="maia"] { letter-spacing: -.003em; }
+html[data-style="maia"] :is(code, pre, kbd, samp) { font-family: var(--font-code); }
+html[data-style="maia"] :is([data-slot="dialog-title"], [data-slot="card-title"], .tray-heading h2) { font-family: var(--font-display); font-weight: 400; letter-spacing: -.01em; }
+html[data-style="maia"] [data-slot="card-title"] { font-size: 1.6rem; line-height: 1.1; }
+html[data-style="maia"] :is([data-slot="card"], .app-panel) { border-color: transparent; box-shadow: var(--maia-shadow); }
+/* Home widgets sit straight on the wallpaper in Maia: no boxes, borders or shadows. */
+html[data-style="maia"] .home-widget-content :is(.email-digest, [data-slot="card"], .app-panel), html[data-style="maia"] .home-widget-content > * { border-color: transparent; background: transparent; box-shadow: none; }
+
+/* Settings */
+html[data-style="maia"] .settings-dialog[data-slot="dialog-content"] { background: var(--theme-base); border: 0; box-shadow: var(--maia-shadow-lifted); }
+html[data-style="maia"] .settings-header { gap: 6px; padding: 40px 56px 28px; border-bottom: 0; }
+html[data-style="maia"] .settings-header [data-slot="dialog-title"] { font-size: 3.25rem; line-height: 1; }
+html[data-style="maia"] .settings-header [data-slot="dialog-description"] { font-size: 14px; color: var(--theme-muted); }
+html[data-style="maia"] .settings-eyebrow { font-size: 11px; letter-spacing: .22em; color: var(--theme-accent); }
+html[data-style="maia"] .settings-body { padding: 8px 56px 40px; gap: 56px; scrollbar-color: var(--theme-border-strong) transparent; }
+html[data-style="maia"] .settings-controls { border-left: 0; padding: 28px 28px 8px; align-self: start; background: var(--theme-surface); border-radius: var(--radius-surface); box-shadow: var(--maia-shadow); }
+html[data-style="maia"] :is(.settings-controls h3, .theme-heading h3, .style-fieldset legend, .theme-fieldset legend) { font-family: var(--font-display); font-size: 1.65rem; font-weight: 400; line-height: 1.1; letter-spacing: -.005em; color: var(--theme-foreground); }
+html[data-style="maia"] .settings-controls h3 { margin-bottom: 18px; }
+html[data-style="maia"] :is(.theme-fieldset legend small, .style-fieldset legend span) { margin-left: 12px; font-family: var(--font-mono); font-size: 12px; letter-spacing: 0; color: var(--theme-muted); }
+html[data-style="maia"] .style-fieldset legend { align-items: baseline; margin-bottom: 20px; }
+html[data-style="maia"] .theme-fieldset { margin-top: 36px; }
+html[data-style="maia"] .theme-fieldset legend { margin-bottom: 16px; font-size: 1.35rem; }
+html[data-style="maia"] .theme-settings { margin-bottom: 48px; padding-bottom: 40px; }
+html[data-style="maia"] .style-fieldset { margin-bottom: 48px; }
+html[data-style="maia"] .style-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; }
+html[data-style="maia"] :is(.style-option, .theme-style, .size-preset) { border-color: transparent; background: var(--theme-surface); box-shadow: var(--maia-shadow); transition: box-shadow 200ms ease, transform 200ms ease; }
+html[data-style="maia"] :is(.style-option, .theme-style):hover { background: var(--theme-surface); transform: translateY(-2px); box-shadow: var(--maia-shadow-lifted); }
+html[data-style="maia"] :is(.style-option.selected, .theme-style[aria-pressed="true"], .size-preset[aria-pressed="true"]) { background: var(--theme-surface); border-color: var(--theme-accent); box-shadow: 0 0 0 1px var(--theme-accent), var(--maia-shadow-lifted); }
+html[data-style="maia"] .style-option { padding: 22px 10px 18px; gap: 6px; }
+html[data-style="maia"] .style-option > span { font-family: var(--font-display); font-size: 1.25rem; font-weight: 400; }
+html[data-style="maia"] .style-option > small { font-size: 12px; }
+html[data-style="maia"] .size-preset { background: var(--theme-base); box-shadow: none; font-size: 13px; padding: 12px 4px; }
+html[data-style="maia"] .size-preset small { font-size: 11px; }
+html[data-style="maia"] .setting-row { padding: 18px 0; font-size: 14px; border-top-color: var(--theme-border); }
+html[data-style="maia"] :is(.toggle-row small, .size-hint, .size-row output) { font-size: 12.5px; line-height: 1.5; }
+html[data-style="maia"] .clock-city-setting label { font-size: 13px; }
+html[data-style="maia"] .clock-city-setting select { font-size: 13px; padding: 11px 14px; background: var(--theme-base); border-color: var(--theme-border); }
+html[data-style="maia"] .settings-footer { padding: 18px 56px; border-top-color: var(--theme-border); background: var(--theme-base); }
+
+/* Appearance */
+html[data-style="maia"] .theme-heading > button { font-size: 12px; color: var(--theme-muted); }
+html[data-style="maia"] .theme-preview { min-height: 240px; gap: 14px; border: 0; box-shadow: inset 0 0 0 1px var(--theme-border); }
+html[data-style="maia"] .theme-preview-time { font: italic 400 112px/0.9 var(--font-display); letter-spacing: -.02em; }
+html[data-style="maia"] .theme-preview-caption { font: 500 11px var(--font-mono); letter-spacing: .24em; text-transform: uppercase; opacity: .7; }
+html[data-style="maia"] .theme-styles { gap: 14px; }
+html[data-style="maia"] .theme-style { padding: 20px 22px; gap: 10px; }
+html[data-style="maia"] .theme-style > span:nth-of-type(2) { font-family: var(--font-display); font-size: 1.5rem; line-height: 1; }
+html[data-style="maia"] .theme-style > small { font-size: 12.5px; }
+html[data-style="maia"] .theme-hint { font-size: 12.5px; margin-top: 28px; }
+html[data-style="maia"] .accent-swatches { display: flex; flex-wrap: wrap; gap: 22px; }
+html[data-style="maia"] .accent-swatches .theme-swatch { gap: 10px; padding: 0; border: 0; font: 12.5px var(--font-mono); background: none; }
+html[data-style="maia"] .accent-swatches .theme-swatch-paint { width: 44px; height: 44px; border: 0; border-radius: 999px; box-shadow: inset 0 0 0 1px rgb(0 0 0 / 8%); transition: box-shadow 200ms ease, transform 200ms ease; }
+html[data-style="maia"] .accent-swatches .theme-swatch:hover .theme-swatch-paint { transform: scale(1.06); }
+html[data-style="maia"] .accent-swatches .theme-swatch[aria-pressed="true"] { color: var(--theme-foreground); }
+html[data-style="maia"] .accent-swatches .theme-swatch[aria-pressed="true"] .theme-swatch-paint { box-shadow: 0 0 0 3px var(--theme-base), 0 0 0 4.5px var(--theme-accent); }
+@media (max-width: 900px) {
+  html[data-style="maia"] .settings-header { padding: 28px 24px 18px; }
+  html[data-style="maia"] .settings-header [data-slot="dialog-title"] { font-size: 2.5rem; }
+  html[data-style="maia"] .settings-body { padding: 8px 24px 28px; gap: 28px; }
+  html[data-style="maia"] .settings-footer { padding: 14px 24px; }
 }

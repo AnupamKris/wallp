@@ -1,0 +1,8 @@
+html.email-code-surface,
+.email-code-surface body,
+.email-code-surface #root { background: var(--background); color: var(--foreground); }
+.code-toast { animation: code-toast-in 180ms ease-out; }
+.code-toast-progress { animation: code-toast-expire 25s linear forwards; }
+@keyframes code-toast-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes code-toast-expire { to { transform: scaleX(0); } }
+@media (prefers-reduced-motion: reduce) { .code-toast, .code-toast-progress { animation: none; } }

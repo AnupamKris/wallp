@@ -47,7 +47,7 @@ export function TrayApps({ active }: { active: boolean }) {
   }
 
   return <>
-    <button className="tray-launcher" aria-haspopup="dialog" aria-expanded={open} aria-controls="tray-dialog" onClick={() => setOpen(true)}><SquaresFourIcon size={18} />System tray</button>
+    <button className="tray-launcher" aria-label="System tray" title="System tray" aria-haspopup="dialog" aria-expanded={open} aria-controls="tray-dialog" onClick={() => setOpen(true)}><SquaresFourIcon size={18} /><span className="tray-launcher-label">System tray</span></button>
     {createPortal(<dialog id="tray-dialog" className="tray-dialog" ref={dialog} aria-labelledby="tray-title" aria-describedby="tray-hint" onClose={() => setOpen(false)} onClick={event => {
       if (event.target !== event.currentTarget) return;
       const rect = event.currentTarget.getBoundingClientRect();

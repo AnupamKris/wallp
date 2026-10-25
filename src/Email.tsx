@@ -1,3 +1,4 @@
+import { linkedItem, ReminderAction } from "./workspace-actions";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -100,6 +101,7 @@ const Thread = memo(function Thread({ thread, account, onBack, onSend }: { threa
   const [html, setHtml] = useState(true);
   const [images, setImages] = useState(false);
   const [reply, setReply] = useState("");
+  const [reminding, setReminding] = useState(false);
   const [sending, setSending] = useState(false);
   const [status, setStatus] = useState("");
   const last = [...thread].reverse().find(m => !m.pending) ?? thread[thread.length - 1];
@@ -114,11 +116,15 @@ const Thread = memo(function Thread({ thread, account, onBack, onSend }: { threa
     catch (err) { setReply(body); setStatus(String(err)); }
     finally { setSending(false); }
   }
+  const source = { title: thread[0].subject, url: `https://mail.google.com/mail/u/?authuser=${encodeURIComponent(account.email)}#all/${encodeURIComponent(last.threadId)}` };
   return <div className="email-reader">
-    <header className="email-reader-head">
+    {reminding && <ReminderAction text={thread[0].subject} source={source} onClose={() => setReminding(false)} />}
+    <header className="email-reader-head flex-wrap">
       <Button variant="ghost" size="icon-sm" className="email-back" aria-label="Back to inbox" onClick={onBack}><ArrowLeftIcon /></Button>
       <h3>{thread[0].subject}</h3>
-      {anyHtml && <Button variant="ghost" size="sm" aria-pressed={!html} title="Toggle between formatted and plain text" onClick={() => setHtml(!html)}>{html ? "Text" : "HTML"}</Button>}
+      <div className="flex w-full flex-wrap gap-2"><Button variant="ghost" size="sm" onClick={() => { try { linkedItem("todos", thread[0].subject || "Follow up on email", source); setStatus("Todo created with email attached."); } catch (err) { setStatus(String(err)); } }}>Add todo</Button>
+      <Button variant="ghost" size="sm" onClick={() => setReminding(true)}>Remind me</Button>
+      {anyHtml && <Button variant="ghost" size="sm" aria-pressed={!html} title="Toggle between formatted and plain text" onClick={() => setHtml(!html)}>{html ? "Text" : "HTML"}</Button>}</div>
     </header>
     {remote && !images && <p className="email-notice">Remote images are blocked. <button onClick={() => setImages(true)}>Load images</button></p>}
     {thread.map(message => <article key={message.id} className={`email-message${message.pending ? " pending" : ""}`}>

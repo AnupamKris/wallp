@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capability for the desktop window",
-  "windows": ["desktop", "taskbar", "launcher"],
+  "windows": ["desktop", "taskbar", "launcher", "email-code", "controller-overlay"],
   "permissions": [
     "core:default",
     "opener:default",

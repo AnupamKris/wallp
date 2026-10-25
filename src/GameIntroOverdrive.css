@@ -1,0 +1,36 @@
+/* GSAP owns motion; these rules provide layout and theme-aware drawing. */
+.overdrive-intro { position: fixed; inset: 0; z-index: 70; display: grid; place-items: center; overflow: hidden; pointer-events: none; perspective: 1000px; }
+.overdrive-hold { z-index: 60; }
+.overdrive-veil { position: absolute; inset: 0; }
+.overdrive-gate { position: absolute; top: -20%; bottom: -20%; width: 72%; transform: skewX(-16deg); }
+.overdrive-gate-left { right: 50%; border-right-width: 1px; }
+.overdrive-gate-right { left: 50%; border-left-width: 1px; }
+.overdrive-cross { position: absolute; top: 50%; left: 0; width: 100%; height: 30%; border-block-width: 1px; transform: translateY(-50%); }
+.overdrive-echo { position: absolute; left: -40%; width: 180%; white-space: nowrap; text-align: center; font-size: clamp(64px, 16vw, 300px); font-weight: 800; line-height: 1; letter-spacing: -.065em; color: transparent; -webkit-text-stroke: 1px var(--foreground); }
+.overdrive-echo-top { top: 2%; transform: rotate(-9deg); }
+.overdrive-echo-bottom { bottom: 2%; transform: rotate(-9deg); }
+.overdrive-orbit, .overdrive-impact { position: absolute; width: min(60vmin, 680px); aspect-ratio: 1; border-width: 1px; }
+.overdrive-orbit-inner { width: min(52vmin, 580px); border-style: dashed; }
+.overdrive-impact { opacity: 0; width: 28vmin; border-width: 2px; }
+.overdrive-impact-inner { border-width: 1px; }
+.overdrive-stage { position: relative; display: grid; justify-items: center; gap: clamp(10px, 2vmin, 24px); width: min(80vw, 800px); }
+.overdrive-icon { display: grid; place-items: center; }
+.overdrive-caption { font-size: clamp(10px, 1.3vmin, 13px); text-transform: uppercase; letter-spacing: .26em; text-align: center; }
+.overdrive-wordmark { display: grid; justify-items: center; gap: .04em; font-size: clamp(48px, 17vmin, 200px); font-weight: 800; line-height: .85; letter-spacing: -.065em; }
+.overdrive-title { display: flex; overflow: hidden; padding: .1em .15em; margin: -.1em -.15em; perspective: 600px; }
+.overdrive-letter { display: inline-block; }
+.overdrive-charge { display: grid; justify-items: center; gap: 12px; margin-top: 8px; width: min(240px, 60vw); }
+.overdrive-ticks { display: flex; width: 100%; height: 6px; gap: 3px; transform: skewX(-16deg); }
+.overdrive-ticks > span { flex: 1; }
+.overdrive-count { font-size: 12px; letter-spacing: .18em; }
+.overdrive-scan { position: absolute; top: 50%; left: 0; width: 100%; height: 2px; opacity: 0; }
+.overdrive-cut { position: absolute; top: -30%; left: calc(50% - 1px); width: 2px; height: 160%; transform: rotate(16deg); opacity: 0; }
+.game-home[data-intro="overdrive"] { --intro: 1250ms; }
+.game-home[data-intro="overdrive"] .game-spotlight { animation-name: overdrive-spotlight-in; }
+.game-home[data-intro="overdrive"] .game-card { animation-name: overdrive-card-in; }
+.game-home[data-leaving][data-transition="overdrive"] { animation: overdrive-leave 460ms cubic-bezier(.7, 0, .3, 1) both; }
+@keyframes overdrive-spotlight-in { from { opacity: 0; transform: translateX(-80px) skewX(-5deg); } }
+@keyframes overdrive-card-in { from { opacity: 0; transform: translate(60px, 24px) rotate(6deg) scale(.9); } }
+@keyframes overdrive-leave { to { opacity: 0; transform: translateX(12%) skewX(-8deg) scale(.96); } }
+@media (max-height: 500px) { .overdrive-stage { gap: 8px; } .overdrive-wordmark { font-size: 15vmin; } .overdrive-icon svg { width: 26px; height: 26px; } .overdrive-charge { gap: 6px; margin-top: 0; } }
+@media (prefers-reduced-motion: reduce) { .game-home[data-leaving][data-transition="overdrive"], .game-home[data-intro="overdrive"] .game-spotlight, .game-home[data-intro="overdrive"] .game-card { animation: none; } }
