@@ -25,11 +25,32 @@
 .quick-launcher-error { position: absolute; top: calc(100% + 8px); right: 0; width: 280px; padding: 12px; background: var(--theme-surface); border: 1px solid var(--theme-border); }
 .quick-panel button:disabled { opacity: .45; cursor: default; }
 .quick-panel button:focus-visible { outline: 2px solid var(--theme-accent, #acc49a); outline-offset: 3px; }
+.quick-caret { transition: transform 160ms ease; }
+.quick-caret.is-open { transform: rotate(180deg); }
+.quick-list { overflow: hidden; border: 1px solid var(--theme-border); background: var(--theme-raised); }
+.quick-list-head { display: flex; align-items: center; gap: 4px; padding: 6px 6px 6px 12px; border-bottom: 1px solid var(--theme-border); font-size: 11px; }
+.quick-list-head > span { margin-right: auto; }
+.quick-list ul { list-style: none; margin: 0; padding: 0; max-height: 240px; overflow-y: auto; scrollbar-width: thin; }
+.quick-list li { border-bottom: 1px solid var(--theme-border); }
+.quick-list li:last-child { border-bottom: 0; }
+.quick-list-row { display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 12px; }
+.quick-list-row > span { flex: 1; min-width: 0; }
+.quick-list-row strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 500; }
+.quick-list-row small { display: block; margin-top: 3px; color: var(--theme-muted); font-size: 9px; }
+.quick-list li[data-connected] small { color: var(--theme-accent); }
+.quick-list-row > svg { flex-shrink: 0; color: var(--theme-muted); }
+.quick-list-password { display: flex; gap: 6px; padding: 0 8px 10px 12px; }
+.quick-list-empty { margin: 0; padding: 12px; color: var(--theme-muted); font-size: 10px; line-height: 1.7; }
+.quick-panel > div > .quick-list-empty { border: 1px solid var(--theme-border); }
+.quick-list-error { margin: 0; padding: 10px 12px; border-top: 1px solid var(--theme-border); color: var(--destructive); font-size: 10px; line-height: 1.7; overflow-wrap: anywhere; }
+.quick-pulse { animation: quick-pulse 1s ease-in-out infinite; }
+@keyframes quick-pulse { 50% { opacity: .3; } }
+@media (prefers-reduced-motion: reduce) { .quick-pulse { animation: none; } .quick-caret { transition: none; } }
 .quick-preferences { margin-top: 24px; padding-top: 24px; border-top: 1px solid var(--theme-border); }
 .quick-preferences h3 { margin: 0; }
 @media (max-width: 440px) { .quick-panel[data-slot="dialog-content"] { padding: 20px; gap: 18px; } }
 
 /* Maia corners; tokens are 0 under Lyra. */
 .quick-panel[data-slot="dialog-content"] { border-radius: var(--radius-surface); }
-.quick-tile, .quick-launcher-error { border-radius: var(--radius-panel); }
+.quick-tile, .quick-launcher-error, .quick-list, .quick-panel > div > .quick-list-empty { border-radius: var(--radius-panel); }
 .quick-shortcuts button { border-radius: var(--radius-item); }

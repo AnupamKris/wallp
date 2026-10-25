@@ -5109,6 +5109,7 @@ dependencies = [
  "tokio",
  "url",
  "windows",
+ "windows-collections",
  "windows-core",
  "winreg 0.55.0",
 ]

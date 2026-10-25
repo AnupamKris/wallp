@@ -19,9 +19,9 @@ use windows::{
     },
 };
 
-struct Runtime;
+pub(crate) struct Runtime;
 impl Runtime {
-    fn new() -> Result<Self, String> {
+    pub(crate) fn new() -> Result<Self, String> {
         unsafe { RoInitialize(RO_INIT_MULTITHREADED) }.map_err(|e| e.to_string())?;
         Ok(Self)
     }

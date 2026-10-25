@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { ArrowsClockwiseIcon, BluetoothIcon, GearIcon, SlidersHorizontalIcon, SpeakerHighIcon, SpeakerSlashIcon, SunIcon, WifiHighIcon } from "@phosphor-icons/react";
+import { ArrowsClockwiseIcon, BluetoothIcon, CaretDownIcon, GearIcon, SlidersHorizontalIcon, SpeakerHighIcon, SpeakerSlashIcon, SunIcon, WifiHighIcon } from "@phosphor-icons/react";
 import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
+import { BluetoothDevices, WifiNetworks } from "./QuickWireless";
 import "./QuickSettings.css";
 
 const preferenceKey = "wallp.quick-settings";
@@ -56,6 +57,7 @@ export function QuickSettings({ active, appearance = "tray" }: { active: boolean
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [expanded, setExpanded] = useState<"wifi" | "bluetooth" | null>(null);
   const working = useRef(false);
   const dragging = useRef(false);
   const desktop = isTauri();
@@ -67,6 +69,7 @@ export function QuickSettings({ active, appearance = "tray" }: { active: boolean
     finally { working.current = false; setBusy(false); }
   }, []);
   useEffect(() => { if (!active || preferences.windowsPanel) setOpen(false); }, [active, preferences.windowsPanel]);
+  useEffect(() => { if (!open) setExpanded(null); }, [open]);
   useEffect(() => {
     if (!open || !active) return;
     setError(""); setNotice("");
@@ -104,6 +107,8 @@ export function QuickSettings({ active, appearance = "tray" }: { active: boolean
   const trigger = (props: { title: string; disabled?: boolean; onClick?: () => void }) => appearance === "button"
     ? <Button variant="outline" {...props}><SlidersHorizontalIcon aria-hidden="true" />Quick settings</Button>
     : <button className="tray-launcher" aria-label="Quick settings" {...props}><SlidersHorizontalIcon size={18} aria-hidden="true" /><span className="tray-launcher-label">Quick settings</span></button>;
+  // Unknown until the first read: assume on so the list can report its own error.
+  const radioOn = (kind: Radio["kind"]) => !controls || controls.radios.some(radio => radio.kind === kind && radio.enabled);
   const launcher = trigger({ title: "Wi-Fi, Bluetooth, volume and brightness" });
   if (preferences.windowsPanel) return <div className="quick-launcher-wrap">
     {trigger({ title: "Open Windows Quick Settings (Win+A)", disabled: busy, onClick: () => void windowsPanel() })}
@@ -124,10 +129,13 @@ export function QuickSettings({ active, appearance = "tray" }: { active: boolean
             {radios.length ? radios.map(radio => <button key={`${kind}:${radio.name}`} className="quick-tile" aria-pressed={radio.enabled} aria-label={`${label}: ${radio.name}`} disabled={!desktop || busy || !radio.controllable} onClick={() => void change({ type: "radio", name: radio.name, kind, enabled: !radio.enabled })}>
               <Icon size={24} aria-hidden="true" /><span>{label}</span><small>{!radio.controllable ? "Hardware disabled" : radio.enabled ? "On" : "Off"}</small>{radios.length > 1 && <small>{radio.name}</small>}
             </button>) : <div className="quick-tile quick-unavailable"><Icon size={24} aria-hidden="true" /><span>{label}</span><small>{!desktop ? "Desktop app required" : !controls ? "Loading…" : "Unavailable"}</small></div>}
-            <button className="quick-link" disabled={!desktop} onClick={() => void manage(kind)}>{kind === "wifi" ? "Manage networks" : "Manage devices"}<span aria-hidden="true">↗</span></button>
+            <button className="quick-link" disabled={!desktop} aria-expanded={expanded === kind} aria-controls={`quick-${kind}-list`} onClick={() => setExpanded(current => current === kind ? null : kind)}>{kind === "wifi" ? "Networks" : "Devices"}<CaretDownIcon size={12} aria-hidden="true" className={expanded === kind ? "quick-caret is-open" : "quick-caret"} /></button>
           </section>;
         })}
       </div>
+      {desktop && expanded && <div id={`quick-${expanded}-list`}>{expanded === "wifi"
+        ? <WifiNetworks on={radioOn("wifi")} onManage={() => void manage("wifi")} />
+        : <BluetoothDevices on={radioOn("bluetooth")} onManage={() => void manage("bluetooth")} />}</div>}
       {controls?.radioError && <p className="quick-message">{controls.radioError}</p>}
       <section className="quick-slider-section" aria-label="Sound">
         <div className="quick-slider-heading"><button className="tray-icon-button" disabled={!desktop || busy || !controls?.audio} aria-label={controls?.audio?.muted ? "Unmute audio" : "Mute audio"} aria-pressed={controls?.audio?.muted || false} onClick={() => void change({ type: "mute", enabled: !controls?.audio?.muted })}>{controls?.audio?.muted ? <SpeakerSlashIcon size={22} /> : <SpeakerHighIcon size={22} />}</button><span id="quick-volume-label">Volume</span><output>{controls?.audio ? `${controls.audio.volume}%${controls.audio.muted ? " · Muted" : ""}` : "—"}</output></div>

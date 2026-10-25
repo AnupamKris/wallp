@@ -23,6 +23,7 @@ mod quick_settings;
 mod system_controls;
 mod taskbar;
 mod tray_apps;
+mod wireless;
 pub use taskbar::recovery_entry;
 
 use std::{
@@ -335,6 +336,10 @@ pub fn run() {
             system_controls::quick_settings_state,
             system_controls::set_quick_setting,
             system_controls::quick_settings_manage,
+            wireless::wifi_networks,
+            wireless::wifi_network,
+            wireless::bluetooth_devices,
+            wireless::bluetooth_device,
             taskbar::taskbar_enabled,
             taskbar::set_taskbar_enabled,
             taskbar::taskbar_ready,
