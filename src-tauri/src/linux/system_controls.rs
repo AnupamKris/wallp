@@ -215,7 +215,7 @@ fn wifi() -> Result<bool, String> {
     }
 }
 
-fn bluetooth() -> Result<bool, String> {
+pub(crate) fn bluetooth() -> Result<bool, String> {
     // No `--timeout`: with it bluetoothctl always waits the full period.
     let output = run("bluetoothctl", &["show"])?;
     if output.lines().any(|l| l.trim() == "Powered: yes") {
@@ -364,8 +364,11 @@ fn launch(program: &str, args: &[&str]) -> Result<(), String> {
 
 /// Bound external utilities so a stalled service cannot hold a request forever.
 /// Drain both pipes while waiting, including on failure, to avoid pipe deadlocks.
-fn run(program: &str, args: &[&str]) -> Result<String, String> {
-    let limit = Duration::from_secs(15);
+pub(crate) fn run(program: &str, args: &[&str]) -> Result<String, String> {
+    run_for(program, args, Duration::from_secs(15))
+}
+
+pub(crate) fn run_for(program: &str, args: &[&str], limit: Duration) -> Result<String, String> {
     let mut child = Command::new(program)
         .args(args)
         .env("LC_ALL", "C")

@@ -39,6 +39,8 @@ mod system_controls;
 mod taskbar;
 #[cfg_attr(target_os = "linux", path = "linux/tray_apps.rs")]
 mod tray_apps;
+#[cfg_attr(target_os = "linux", path = "linux/wireless.rs")]
+mod wireless;
 pub use taskbar::recovery_entry;
 
 use std::{
@@ -422,6 +424,10 @@ pub fn run() {
             system_controls::set_quick_setting,
             system_controls::quick_settings_manage,
             taskbar::taskbar_supported,
+            wireless::wifi_networks,
+            wireless::wifi_network,
+            wireless::bluetooth_devices,
+            wireless::bluetooth_device,
             taskbar::taskbar_enabled,
             taskbar::set_taskbar_enabled,
             taskbar::taskbar_ready,
